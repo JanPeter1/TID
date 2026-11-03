@@ -106,10 +106,10 @@ static void draw_tabs(void)
 
 static void draw_side_buttons(void)
 {
-    display_fill_round_rect(2, 102, 24, 42, COLOR_PANEL);
-    display_fill_round_rect(294, 102, 24, 42, COLOR_PANEL);
-    display_text_bg(7, 109, "<", COLOR_ORANGE, COLOR_PANEL, 2);
-    display_text_bg(299, 109, ">", COLOR_ORANGE, COLOR_PANEL, 2);
+    display_fill_round_rect(2, 96, 24, 64, COLOR_PANEL);
+    display_fill_round_rect(294, 96, 24, 64, COLOR_PANEL);
+    display_text_bg(7, 114, "<", COLOR_ORANGE, COLOR_PANEL, 2);
+    display_text_bg(299, 114, ">", COLOR_ORANGE, COLOR_PANEL, 2);
 }
 
 static uint8_t page_subpage_count(page_t page, const app_data_t *data)

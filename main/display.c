@@ -12,7 +12,6 @@
 #include "freertos/task.h"
 #include "german_font.h"
 #include "lvgl.h"
-#include "lvgl/widgets/lv_qrcode.h"
 #include "touch.h"
 
 #define TFT_HOST SPI2_HOST
@@ -233,7 +232,8 @@ static lv_obj_t *new_object(void)
         return NULL;
     }
     lv_obj_remove_style_all(object);
-    lv_obj_remove_flag(object, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_clickable(object, false);
+    lv_obj_set_scrollable(object, false);
     lv_obj_set_style_pad_all(object, 0, 0);
     lv_obj_set_style_border_width(object, 0, 0);
     lv_obj_set_style_bg_opa(object, LV_OPA_TRANSP, 0);
@@ -306,7 +306,8 @@ void display_line(int x0, int y0, int x1, int y1, uint16_t color)
         return;
     }
     lv_obj_remove_style_all(object);
-    lv_obj_remove_flag(object, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_clickable(object, false);
+    lv_obj_set_scrollable(object, false);
     lv_obj_set_pos(object, left, top);
     lv_obj_set_size(object, (x0 > x1 ? x0 - x1 : x1 - x0) + 1,
                     (y0 > y1 ? y0 - y1 : y1 - y0) + 1);
