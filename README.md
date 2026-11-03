@@ -1,47 +1,57 @@
 # Texel-Info-Display
 
-ESP-IDF firmware for the ESP32-2432S028 CYD (ILI9341 display and XPT2046 touch) described in [PRD.md](PRD.md). The screen is landscape 320x240 with icon tabs and left/right buttons that cycle through subpages of the selected section.
+ESP-IDF firmware for the ESP32-2432S028 CYD (320 x 240 ILI9341 display and XPT2046 touch), using LVGL 9.6. The interface has five icon tabs and rounded side controls for browsing subpages. Product requirements and remaining decisions are in [PRD.md](PRD.md).
 
-## Status
+## Current implementation
 
-This is the first hardware-oriented project baseline. It includes a native SPI display/touch driver, weather and marine data retrieval, a protected local configuration page, and a five-section interface with multiple subpages per section. The source-defined VVV page, exact HTML selectors, photo manifest, and signed OTA manifest are not yet known, so those sections are intentionally marked as unavailable rather than showing fabricated content.
+- LVGL 9.6 renders the interface to the ILI9341 through a partial RGB565 SPI flush buffer. XPT2046 samples are registered as an LVGL pointer input device; screen navigation is handled in the UI task.
+- Montserrat is used for crisp 12 px and 24 px text. Anti-aliased Noto Sans glyphs add German `äöüÄÖÜß`; the font subset's SIL Open Font License is in `assets/fonts/OFL.txt`.
+- Open-Meteo weather and marine requests, cached content, and periodic refresh every six hours. Fetching starts only after the station has obtained an IP address; a pending initial refresh waits for DHCP instead of attempting DNS while associating. The weather section has pages for current conditions, the next five days, and modeled high/low water with a 12-hour trend.
+- Weather conditions and daily forecast rows include small WMO-code icons rendered as LVGL objects.
+- VVV events are fetched from the page's public GraphQL endpoint; up to 12 today/tomorrow timeslots are cached and shown one per subpage. The compact query requests titles, places, detail slugs, and times only.
+- The status bar shows Wi-Fi connection quality through colored signal bars, without a numeric RSSI value. The Wi-Fi icon sits left of the icon-only setup (wrench), QR, and deep-sleep controls. LVGL's QR widget opens the source URL for the selected subpage; touch on the XPT2046 wakes the device from deep sleep.
+- NVS-backed Wi-Fi/calendar configuration through a local setup portal; the larger content cache uses its own flash NVS partition.
+- SNTP time synchronization after the station receives an IP address; local time follows `Europe/Amsterdam`. The status bar shows time in orange followed by date in white.
+- Stack protection and light heap poisoning are enabled to help catch the reported intermittent FreeRTOS/LWIP crash; the TCP/IP stack is increased to 8 KB. Device stability still needs verification after flashing.
+- Dual OTA application partitions exist, but OTA update logic is not implemented.
+
+VVV sightseeing recommendations and photo loading are not implemented. House/calendar HTML currently uses a minimal text conversion rather than site-specific parsing; the UI labels unavailable content instead of inventing it.
 
 ## Build and flash
 
-1. Install Espressif ESP-IDF (the project uses the ESP-IDF extension/toolchain, not Arduino).
-2. Open this folder in VS Code and select target `esp32`.
-3. Use **ESP-IDF: Build Project**, then **ESP-IDF: Flash**.
-4. On first boot, tap **SETUP** at the bottom right. The device starts an open setup access point and displays its SSID and portal address. Connect to that network and open `http://192.168.4.1/`; no login is required.
-5. Enter the home Wi-Fi details and calendar credentials. Settings are stored in NVS and are not part of the source tree.
+1. Install ESP-IDF 6.1 and open this project in VS Code with the Espressif ESP-IDF extension.
+2. Select target `esp32`.
+3. Run **ESP-IDF: Build Project**, then **ESP-IDF: Flash**.
 
-The setup AP is off by default and starts only when **SETUP** is tapped. Both the AP and setup portal are open while enabled; portal routes return unavailable when the AP is off. The portal uses HTTP, not HTTPS, so enable the AP only while configuring the device and disconnect it afterward by rebooting.
+Use the ESP-IDF extension for project operations. The project requires the ESP-IDF 6 split components `esp_driver_gpio` and `esp_driver_spi`; LVGL and the other managed components are declared in `main/idf_component.yml`.
 
-## Data sources
+## Initial Wi-Fi setup
 
-- Weather: Open-Meteo Forecast API, location 53.124279, 4.812830, Europe/Amsterdam. Requests run at startup when Wi-Fi is available and then every six hours.
-- Marine: Open-Meteo Marine API. The firmware finds the next local sea-level extremum as an approximate high/low-water event. Coastal model values are only indicative and are not for navigation.
-- House information and calendar: HTML is fetched from the URLs in `main/data.c`; the calendar uses Basic authentication configured on the device. Current HTML conversion is a deliberately small text fallback, not a site-specific parser.
-- VVV events and photos: disabled until the VVV URL/selectors and photo manifest schema are agreed. The expected photo files are JPEG, 320x200 pixels.
+1. Tap the wrench icon at the bottom right of the display. The setup access point is off by default; tapping starts the open AP and shows its SSID.
+2. Connect to that network and open `http://192.168.4.1/`. The portal does not require a login.
+3. Enter the home Wi-Fi and calendar credentials. They are stored in NVS; the setup AP remains enabled until reboot.
 
-Weather data attribution is shown on the weather tab. Open-Meteo's free service is intended for non-commercial usage and requires CC BY attribution.
+The other bottom-right icons display a QR code for the active page or put the display into deep sleep. Touch the screen to wake it.
 
-## Configuration and security notes
+The setup network and portal are both open and use HTTP without TLS. Anyone nearby can connect and change settings while setup mode is active. Enable setup only briefly in a trusted environment. NVS and device flash are not encrypted; someone with physical flash access may recover stored credentials.
 
-- Do not commit Wi-Fi or calendar credentials. Provision them through the device setup page; they are stored in NVS.
-- NVS storage is not encrypted by this baseline. Anyone with physical access to flash may recover saved credentials. Enable ESP-IDF NVS encryption/flash encryption before treating the device as physically secure.
-- HTTPS requests validate server certificates using ESP-IDF's certificate bundle.
-- OTA is not enabled yet. The server needs a defined version manifest, firmware URL, signing/verification scheme, and an update process tested against the 4 MB partition layout before automatic installation is safe.
-- The screen and touch pins follow the ESP_CoGo CYD setup. Confirm orientation, touch calibration, and display behavior on the actual board before unattended use.
-- Touch uses the CYD's separate SPI3 bus (MOSI GPIO 32, MISO GPIO 39, SCLK GPIO 25, CS GPIO 33, IRQ GPIO 36); the TFT uses SPI2. SNTP starts after Wi-Fi obtains an IP address and logs successful synchronization outside the LWIP callback. The bottom status bar shows local date and time using the `Europe/Amsterdam` daylight-saving rules.
+## Data sources and limits
 
-## Project layout
+- Weather: Open-Meteo Forecast API at 53.124279, 4.812830. The display shows current temperature, wind/gusts, precipitation, humidity, and a five-day daily forecast. Requests run on startup when connected and every six hours thereafter. Open-Meteo is for non-commercial use and requires CC BY attribution.
+- Marine: Open-Meteo Marine API. The firmware finds the next modeled local water-level extremum after the current forecast time and shows it with a 12-hour trend. Coastal model levels are approximate and must not be used for navigation or safety decisions.
+- House information and calendar: endpoints are in `main/data.c`; calendar credentials are entered through setup. HTML parsing is currently a simple text fallback.
+- Events: VVV Texel German event overview. A compact GraphQL request retrieves timeslots in the local date range; matching entries are filtered to today and tomorrow and up to 12 are stored.
+- Photos: awaiting a confirmed source/manifest format.
 
-- `main/display.*`: ILI9341 initialization and basic text/shape drawing over SPI.
-- `main/touch.*`: XPT2046 pressure and X/Y SPI sampling with initial touch-coordinate mapping.
-- `main/config.*`: on-demand open setup AP and NVS-backed settings.
-- `main/web_config.*`: password-protected setup form.
-- `main/data.*`: Open-Meteo/Marine requests and website text retrieval.
-- `partitions.csv`: dual OTA application slots for a 4 MB ESP32.
+HTTPS data requests use the ESP-IDF certificate bundle. Do not commit Wi-Fi or calendar secrets.
 
-The GPIO and SPI APIs use the ESP-IDF 6 split components `esp_driver_gpio` and
-`esp_driver_spi`, declared directly by the main component.
+## Source layout
+
+- `main/main.c`: UI rendering, navigation, status clock, and touch event handling.
+- `main/display.c` / `main/display.h`: ILI9341 SPI initialization, LVGL display flush, pointer input, and drawing helpers.
+- `main/german_font.c` / `main/german_font.h`: Noto Sans glyph subset and Montserrat fallbacks; see `assets/fonts/OFL.txt`.
+- `main/touch.c` / `main/touch.h`: XPT2046 SPI3 input and coordinate mapping.
+- `main/config.c` / `main/config.h`: Wi-Fi, NVS settings, setup AP, and SNTP startup.
+- `main/web_config.c` / `main/web_config.h`: local setup portal.
+- `main/data.c` / `main/data.h`: remote requests, parsing, refresh task, and cache.
+- `partitions.csv`: 4 MB flash layout with dual OTA application slots and a dedicated content-cache NVS partition. Flash the partition table along with the firmware after changing this layout.

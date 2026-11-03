@@ -21,7 +21,7 @@ static const char *TAG = "config";
 static const char *NVS_NAMESPACE = "texel";
 static device_config_t stored_config;
 static char setup_ssid[24];
-static bool connected;
+static volatile bool connected;
 static bool setup_ap_active;
 static bool sntp_started;
 static volatile bool sntp_synced;
@@ -159,6 +159,12 @@ static void make_setup_credentials(void)
 
 const char *config_ap_ssid(void) { return setup_ssid; }
 bool config_wifi_connected(void) { return connected; }
+int config_wifi_rssi(void)
+{
+    wifi_ap_record_t ap_info = {0};
+    if (!connected || esp_wifi_sta_get_ap_info(&ap_info) != ESP_OK) return -127;
+    return ap_info.rssi;
+}
 bool config_setup_ap_active(void) { return setup_ap_active; }
 bool config_ntp_synced(void) { return sntp_synced; }
 
@@ -216,7 +222,7 @@ esp_err_t config_init(void)
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "set station mode");
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "start Wi-Fi");
     configure_network(0);
-    if (xTaskCreate(wifi_retry_task, "wifi_retry", 3072, NULL, 3, NULL) != pdPASS) {
+    if (xTaskCreate(wifi_retry_task, "wifi_retry", 4096, NULL, 3, NULL) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
     ESP_LOGI(TAG, "Setup AP is disabled; tap SETUP on the display to enable it");

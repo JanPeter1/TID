@@ -23,6 +23,7 @@ esp_err_t config_save(const device_config_t *config);
 void config_clear(device_config_t *config);
 const char *config_ap_ssid(void);
 bool config_wifi_connected(void);
+int config_wifi_rssi(void);
 bool config_setup_ap_active(void);
 bool config_ntp_synced(void);
 esp_err_t config_start_setup_ap(void);

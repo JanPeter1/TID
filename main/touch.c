@@ -5,6 +5,7 @@
 #include "driver/spi_master.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_sleep.h"
 
 #define TOUCH_HOST SPI3_HOST
 #define TOUCH_MOSI 32
@@ -105,4 +106,10 @@ bool touch_read(int *x, int *y)
         reported_touch = true;
     }
     return true;
+}
+
+esp_err_t touch_enable_deep_sleep_wakeup(void)
+{
+    if (gpio_get_level(TOUCH_IRQ) == 0) return ESP_ERR_INVALID_STATE;
+    return esp_sleep_enable_ext0_wakeup(TOUCH_IRQ, 0);
 }

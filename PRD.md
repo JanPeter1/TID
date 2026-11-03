@@ -1,8 +1,8 @@
 # Product Requirements Document: Texel-Info-Display
 
-**Status:** Entwurf  
-**Produkt:** ESP32 CYD-Info-Display für ein Ferienhaus auf Texel  
-**Sprache der Anzeige:** Deutsch  
+**Status:** Umsetzung in Arbeit
+**Produkt:** ESP32 CYD-Info-Display für ein Ferienhaus auf Texel
+**Sprache der Anzeige:** Deutsch
 **Stand:** 3. November 2026
 
 ## 1. Produktidee
@@ -10,6 +10,15 @@
 Ein dauerhaft verfügbares, auf einen ESP32 CYD (Cheap Yellow Display) zugeschnittenes Informationsdisplay für Gäste eines Ferienhauses auf Texel. Die Oberfläche orientiert sich am bereitgestellten Screenshot: dunkles Design, orangefarbene Akzente, kompakte Registerkarten und eine gut lesbare Informationsfläche.
 
 Die Inhalte werden, soweit möglich, regelmäßig aus den angegebenen Webquellen aktualisiert. Das Display soll auch bei vorübergehendem Ausfall von WLAN oder Datenquellen sinnvoll nutzbar bleiben und den letzten erfolgreichen Datenstand anzeigen.
+
+## Umsetzungsstand
+
+- **Bisher am Gerät bestätigt:** ESP-IDF-Projekt für ESP32-2432S028, Displayausrichtung, XPT2046-Touch über separaten SPI-Bus, fünf Icon-Bereiche mit Unterseiten und lokaler Setup-Modus.
+- **LVGL-Umstellung implementiert, Hardwareverhalten noch zu prüfen:** LVGL 9.6 mit partiellem RGB565-Framebuffer, SPI-Flush für das ILI9341 und XPT2046 als Pointer-Eingabe. Die UI verwendet scharfe Montserrat-Schriften mit Noto-Sans-Glyphen für `äöüÄÖÜß`.
+- **Implementiert, Hardwareverhalten noch zu prüfen:** Wetter-/Marineabruf mit den Seiten „Jetzt“, Fünf-Tage-Vorschau und Gezeitenverlauf, Cache, NTP-Synchronisierung nach WLAN-Verbindung und lokales Setup-Portal ohne Login.
+- **Implementiert, Hardwareverhalten noch zu prüfen:** VVV-GraphQL-Abruf, Filterung auf heute/morgen und eine Unterseite je Event (maximal 12 gespeicherte Events); Wetteransichten mit gezeichneten Wetter-Icons.
+- **Noch offen:** VVV-Abruf und Cache auf dem Gerät nach Flashen der aktualisierten Partitionstabelle verifizieren, Ausflugsziele, Fotos/Manifest, gezieltes HTML-Parsing der Haus-/Kalenderseiten, Anzeige verlässlicher Aktualisierungszeitpunkte und OTA-Update-Logik.
+- Die aktuelle Refresh-Implementierung verwendet ein Sechs-Stunden-Intervall und startet Abrufe erst nach `IP_EVENT_STA_GOT_IP`; die anfängliche Aktualisierung bleibt während DHCP ausstehend und wird nach erhaltener IP ausgeführt. Große HTTP-Antwortpuffer liegen auf dem Heap. Nach wiederholt gemeldeten Abstürzen im LWIP-TCP/IP-Task wurden dessen Stack auf 8 KB erhöht und Compiler-Stackschutz sowie leichtgewichtige Heap-Prüfung aktiviert. Laufzeitstabilität ist nach erneutem Flashen zu verifizieren; die Firmware protokolliert außerdem den verbleibenden Stack der UI- und Daten-Tasks.
 
 ## 2. Ziele
 
@@ -33,18 +42,22 @@ Die Inhalte werden, soweit möglich, regelmäßig aus den angegebenen Webquellen
 
 ## 4. Zielgerät und Bedienkonzept
 
-- Zielplattform laut [ESP_CoGo-Projekt](https://github.com/JanPeter1/ESP_CoGo): ESP32-2432S028, ESP32 Dev Module, 2,8-Zoll-ILI9341-Farbdisplay (320 × 240 Pixel in der Projektbeschreibung; Setup definiert 240 × 320) und XPT2046-resistiver Touchcontroller.
-- Ziel-Framework ist ESP-IDF. Das Referenz-Repository ist derzeit allerdings auf PlatformIO mit Arduino-Framework konfiguriert; die Hardwarekonfiguration kann als Vorlage dienen, die Firmware muss für ESP-IDF portiert werden.
-- Die dortige TFT_eSPI-Konfiguration verwendet unter anderem Hintergrundbeleuchtung GPIO 21 und Touch-CS GPIO 33. Pinbelegung und Displayorientierung sind vor Übernahme auf dem konkreten Gerät zu verifizieren.
-- Das Layout soll sich am angehängten Referenzbild orientieren: dunkler Hintergrund, kontrastreiche Texte, orange Hervorhebungen, kompakte Navigationsleiste und Karten-/Listenansichten.
+- Zielplattform: ESP32-2432S028 („CYD“), ESP-IDF 6.1, 320 × 240 Pixel im Querformat, ILI9341 und resistiver XPT2046-Touchcontroller. Ausrichtung und Touchbedienung wurden auf dem Gerät bestätigt.
+- Das TFT verwendet SPI2. Der Touchcontroller verwendet gemäß dem funktionierenden Referenzprojekt einen separaten SPI3-Bus: MOSI GPIO 32, MISO GPIO 39, SCLK GPIO 25, CS GPIO 33, IRQ GPIO 36. Die Display-Hintergrundbeleuchtung liegt auf GPIO 21.
+- Das Layout soll sich am angehängten Referenzbild orientieren: dunkler Hintergrund, kontrastreiche Texte, orange Hervorhebungen, kompakte Navigationsleiste und Karten-/Listenansichten. Die Anzeige wird mit LVGL 9.6 aufgebaut.
 - Hauptbereiche:
   1. **Aktuell**
   2. **Kalender**
   3. **Fotos**
   4. **Wetter**
   5. **Infos**
-- Jeder Hauptbereich besitzt mehrere Unterseiten. Die seitlichen `<`- und `>`-Touchflächen blättern ausschließlich innerhalb des ausgewählten Bereichs; eine Seitenanzeige zeigt die aktuelle Position. Ein Wechsel des Hauptbereichs startet auf dessen erster Unterseite.
-- Bedienung ausschließlich über den XPT2046-Touchcontroller; vor Umsetzung ist die Touchkalibrierung auf dem konkreten Gerät zu prüfen.
+- Jeder Hauptbereich besitzt mehrere Unterseiten. Abgerundete seitliche `<`- und `>`-Schaltflächen blättern ausschließlich innerhalb des ausgewählten Bereichs; eine Seitenanzeige zeigt die aktuelle Position. Ein Wechsel des Hauptbereichs startet auf dessen erster Unterseite.
+- Die Statusleiste zeigt den WLAN-Status und die Signalqualität ausschließlich über farbige Balken: grün ab -60 dBm, gelb ab -75 dBm, darunter beziehungsweise ohne Verbindung rot; ein numerischer RSSI-Wert wird nicht angezeigt. Das WLAN-Symbol steht links von Setup (Schraubenschlüssel), Deep Sleep und QR-Code; diese bleiben reine Icon-Schaltflächen.
+- Der Deep-Sleep-Modus wird über den Touch-IRQ des XPT2046 beendet. Vor dem Einschlafen wartet das Gerät auf das Loslassen des Touchfelds.
+- Die QR-Schaltfläche zeigt einen QR-Code zur Quelle der aktuellen Unterseite, inklusive individueller Event-URL, sofern die Veranstaltungsdaten eine solche enthalten.
+- Die Touch-Zonen der seitlichen Navigation erstrecken sich zur einfacheren Bedienung über die gesamte Höhe des Inhaltsbereichs; die sichtbaren Pfeil-Schaltflächen bleiben kompakt und abgerundet.
+- Die Statuszeile zeigt die lokale Uhrzeit vor dem Datum in unterschiedlichen Farben. Zeitquelle ist NTP; Zeitzone ist `Europe/Amsterdam` einschließlich Sommerzeit.
+- Bedienung ausschließlich über den XPT2046-Touchcontroller; die Touchbedienung wurde am konkreten Gerät bestätigt. Eine spätere Änderung der Koordinatenabbildung muss erneut am Gerät geprüft werden.
 - Die Oberfläche muss für die tatsächliche Displayauflösung und Orientierung des ausgewählten Geräts optimiert werden. Der Screenshot dient als visuelle Referenz, nicht als verbindliche Pixelvorlage.
 - Lange Inhalte müssen scrollbar oder in kompakte, einzeln navigierbare Karten aufgeteilt sein. Text darf nicht abgeschnitten werden, ohne dass er erreichbar ist.
 
@@ -53,7 +66,8 @@ Die Inhalte werden, soweit möglich, regelmäßig aus den angegebenen Webquellen
 ### 5.1 Aktuell
 
 - Zeigt aktuelle Veranstaltungen und Termine auf Texel, mindestens für heute und morgen.
-- Quelle: Webseite des VVV Texel.
+- Quelle: [Veranstaltungsübersicht des VVV Texel](https://www.texel.net/de/veranstaltungsuebersicht/).
+- Veranstaltungen für das lokale heutige und morgige Datum werden dynamisch über die öffentliche GraphQL-Schnittstelle der VVV-Seite abgerufen. Jeder Treffer erhält eine eigene Unterseite mit Titel, Datum/Uhrzeit und Ort sowie einem QR-Link zur Detailseite; maximal 12 passende Termine werden gespeichert.
 - Zeigt außerdem sehenswerte Orte und Tipps; die Referenzoberfläche sieht Filter/Kategorien wie „Alle“, „Orte & Sights“ und „Kinder & Familie“ sowie eine Karten-/Karussellansicht vor.
 - Jeder Eintrag soll, soweit von der Quelle geliefert, Titel, Datum/Uhrzeit, Ort und eine kurze Beschreibung enthalten.
 - Wenn Inhalte nicht abrufbar sind, werden gespeicherte letzte Inhalte mit ihrem Aktualisierungszeitpunkt gezeigt. Sind keine gespeicherten Inhalte vorhanden, erscheint eine verständliche Fehlermeldung.
@@ -80,9 +94,12 @@ Die Inhalte werden, soweit möglich, regelmäßig aus den angegebenen Webquellen
 - **Standort:** Slufterweg 94, De Cocksdorp, Texel. Für die Abfrage ermittelte OpenStreetMap/Nominatim die Koordinaten **53.1242788° N, 4.8128299° E**. Die Adresse muss nicht auf dem Display erscheinen.
 - **Empfohlener Wetteranbieter:** [Open-Meteo Forecast API](https://open-meteo.com/en/docs). Sie bietet aktuelle Bedingungen und stündliche/tägliche Vorhersagen ohne API-Schlüssel. Die kostenlose API ist für nicht-kommerzielle Nutzung vorgesehen; laut [Nutzungsbedingungen](https://open-meteo.com/en/terms) gelten unter anderem Grenzen von 10.000 Aufrufen pro Tag, 5.000 pro Stunde und 600 pro Minute. Für ein einzelnes Display mit seltenen Abrufen sollte das Kontingent ausreichen.
 - Anzeige: aktuelles Wetter, Temperatur und gefühlte Temperatur, Wind und Böen, Niederschlagswahrscheinlichkeit/-menge sowie Tageshöchst- und -tiefsttemperatur für die kommenden Tage. Zeitzone: `Europe/Amsterdam`.
+- WMO-Wettercodes werden in der aktuellen Wetteransicht und in der Fünf-Tage-Vorschau durch gezeichnete Symbole (Sonne, Wolken, Regen, Schnee, Nebel, Gewitter) ergänzt.
+- Umgesetzte Unterseiten: aktuelle Bedingungen, Vorschau für die fünf folgenden Tage und Gezeiten mit nächstem modelliertem Hoch- oder Niedrigwasser sowie einer 12-Stunden-Verlaufsgrafik.
 - **Gezeiten:** Als erste Quelle dient die [Open-Meteo Marine API](https://open-meteo.com/en/docs/marine-weather-api). Sie liefert unter anderem den modellierten Meeresspiegel einschließlich Gezeiten. Die Anzeige soll Hoch- und Niedrigwasserzeiten sowie nach Möglichkeit eine einfache Verlaufsgrafik enthalten. Der Anbieter weist darauf hin, dass die Auflösung etwa 8 km beträgt, die Genauigkeit in Küstengebieten eingeschränkt ist und die Daten nicht für Navigation geeignet sind. Werte sind daher als Modell-/Orientierungswerte zu kennzeichnen, nicht als verlässliche lokale Hochwasserwarnung.
 - Open-Meteo-Daten stehen unter [CC BY 4.0](https://open-meteo.com/en/licence); auf der Wetteransicht ist die Quellenangabe „Weather data by Open-Meteo.com“ mit Link vorzusehen. Das Projekt ist laut Betreiber ausschließlich privat.
 - Wetter und Gezeiten erhalten jeweils einen Aktualisierungszeitpunkt. Veraltete oder nicht verfügbare Daten werden kenntlich gemacht.
+- Die lokale Uhr wird nach erfolgreicher WLAN-Verbindung über SNTP/NTP synchronisiert. Die Zeitangabe bleibt bis zur erfolgreichen Synchronisierung als nicht verfügbar gekennzeichnet.
 
 ### 5.5 Infos
 
@@ -108,7 +125,7 @@ Die Inhalte werden, soweit möglich, regelmäßig aus den angegebenen Webquellen
 - **Lesbarkeit:** ausreichender Kontrast, gut erkennbare Schriftgrößen und keine wesentliche Information ausschließlich durch Farbe vermitteln.
 - **Reaktionsfähigkeit:** Navigation und Darstellung bleiben nutzbar, während Daten geladen werden.
 - **Robustheit:** zeitlich begrenzte Netzwerkzugriffe, begrenzter Speicherverbrauch und Behandlung fehlerhafter oder unvollständiger Antworten.
-- **Datenschutz und Sicherheit:** keine unnötigen personenbezogenen Daten; Zugangsdaten werden nicht in versionierte Dateien oder öffentliche Artefakte eingecheckt und nicht unverschlüsselt übertragen. Die lokale Bereitstellung von privaten WLAN- und Kalender-Zugangsdaten ist möglich; die Auslesbarkeit aus Firmware beziehungsweise Gerätespeicher ist zu berücksichtigen.
+- **Datenschutz und Sicherheit:** keine unnötigen personenbezogenen Daten; Zugangsdaten werden nicht in versionierte Dateien oder öffentliche Artefakte eingecheckt. Der Setup-AP und das lokale HTTP-Portal sind während des Setup-Modus bewusst offen und unverschlüsselt; der Modus ist standardmäßig aus und wird nur per Touch gestartet. Er darf nur kurz in einer vertrauenswürdigen Umgebung aktiv sein. Die Auslesbarkeit der im nicht verschlüsselten NVS gespeicherten Zugangsdaten bei physischem Zugriff ist zu berücksichtigen.
 - **Wartbarkeit:** Datenabruf, Datenaufbereitung und Darstellung sollen klar voneinander getrennt sein, damit sich eine geänderte Webseite nicht durch die gesamte Anzeige zieht.
 - **Nachvollziehbarkeit:** Fehler und Datenalter müssen für Nutzer erkennbar sein; technische Diagnose darf keine Geheimnisse protokollieren.
 
@@ -132,14 +149,16 @@ Die Inhalte werden, soweit möglich, regelmäßig aus den angegebenen Webquellen
 8. Ein Fehler oder eine leere Antwort einer Quelle verhindert nicht die Anzeige der anderen Bereiche.
 9. Die Datenaktualität ist für jede dynamische Quelle erkennbar.
 10. Dynamische Inhalte werden planmäßig viermal täglich aktualisiert; bei Netzwerkfehlern bleibt die Oberfläche bedienbar und zeigt den letzten Datenstand.
-11. WLAN-Zugangsdaten können über die geschützte lokale Konfiguration ergänzt werden, ohne sie in versionierten Dateien abzulegen.
+11. WLAN-Zugangsdaten können nach manuellem Start des Setup-Modus über das lokale Portal ohne Login konfiguriert werden. Der AP ist standardmäßig aus; das Sicherheitsrisiko des offenen HTTP-Portals wird klar ausgewiesen.
 12. Ein fehlgeschlagenes OTA-Update lässt das Gerät mit der vorherigen Firmware starten.
+13. Nach erfolgreicher WLAN-Verbindung wird die lokale Uhr über NTP synchronisiert und zeigt Zeit vor Datum in unterschiedlichen Farben und der Zeitzone `Europe/Amsterdam`.
 
 ## 9. Entscheidungen und offene Punkte
 
 ### Bestätigte Anforderungen
 
-- **Hardware:** ESP32-2432S028 mit ILI9341 und XPT2046-Touch aus dem ESP_CoGo-Projekt. Die widersprüchlichen Orientierungs-/Auflösungsangaben (320 × 240 in der Beschreibung, 240 × 320 im Display-Setup) werden vor dem UI-Layout am realen Gerät geprüft.
+- **Hardware:** ESP32-2432S028 mit ILI9341 und XPT2046-Touch aus dem ESP_CoGo-Projekt; 320 × 240 im Querformat. Displayausrichtung und Touchbedienung wurden auf dem Gerät bestätigt. Der Touch nutzt SPI3 auf GPIO 25/32/39, unabhängig vom TFT-SPI2.
+- **UI und Schrift:** LVGL 9.6 rendert mit partiellem RGB565-Framebuffer; Montserrat wird durch Noto-Sans-Glyphen für deutsche Umlaute ergänzt. Die Noto-Sans-Lizenz liegt unter `assets/fonts/OFL.txt`.
 - **Interaktion:** ausschließlich Touch.
 - **Framework:** ESP-IDF ist als Ziel festgelegt. Das Referenz-Repository nutzt derzeit PlatformIO/Arduino; eine Portierung beziehungsweise Übernahme nur der Hardwarekonfiguration ist erforderlich.
 - **Wetterbetrieb:** ausschließlich privates Projekt; Open-Meteo Free ist damit als Anbieter vorgesehen, sofern die Nutzungsbedingungen unverändert passen. CC-BY-Quellenangabe bleibt erforderlich.
@@ -148,7 +167,9 @@ Die Inhalte werden, soweit möglich, regelmäßig aus den angegebenen Webquellen
 - **Fotos:** Es wird ein Manifest für die Bilddateien bereitgestellt. Empfohlen sind JPEGs mit 320 × 200 Pixeln und möglichst höchstens 100 KB pro Bild.
 - **Aktualisierung:** alle dynamischen Inhalte werden viermal täglich aktualisiert.
 - **Sprache und Zeitzone:** ausschließlich Deutsch; Zeitzone `Europe/Amsterdam`.
-- **WLAN:** ein vorgegebenes Heimnetz wird beim lokalen Gerätesetup eingerichtet. Weitere WLAN-Netze können über eine geschützte lokale Webkonfiguration ergänzt werden. SSID und Passwörter werden nicht in versionierte Dateien oder öffentliche Artefakte eingecheckt; die Geräteoberfläche muss Zugangsdaten schützen.
+- **WLAN:** Heimnetz-Zugangsdaten werden über das lokale Setup-Portal in NVS gespeichert und nicht in versionierte Dateien eingecheckt. Der Setup-AP ist standardmäßig ausgeschaltet und wird per Touch aktiviert. Währenddessen ist das WLAN offen; das Portal erfordert keinen Login und verwendet unverschlüsseltes HTTP. Der Betreiber akzeptiert dieses Verhalten für die private Verwendung und aktiviert den Setup-Modus nur kurz in vertrauenswürdiger Umgebung. Flash/NVS-Verschlüsselung ist nicht aktiviert.
+- **Zeit:** NTP-Synchronisierung beginnt nach erfolgreichem Erhalt einer WLAN-IP-Adresse. Der Standort verwendet die IANA-Zeitzone `Europe/Amsterdam`.
+- **Betriebsstabilität:** Netzwerkantwortpuffer müssen auf dem Heap oder in ausreichend dimensioniertem Speicher liegen; sie dürfen nicht größer als der Stack des aufrufenden Tasks sein.
 - **Inhaltsrechte:** Nutzer bestätigt, dass die vorgesehene Anzeige und Zwischenspeicherung der Inhalte/Bilder gestattet ist.
 - **OTA:** Firmware wird von `https://familie-riegel.de/tx94/firmware` bezogen. Prüfung erfolgt automatisch nachts oder manuell über das Display; Installation nutzt A/B-Partitionen und muss einen sicheren Rückfall ermöglichen.
 
@@ -158,7 +179,7 @@ Die Inhalte werden, soweit möglich, regelmäßig aus den angegebenen Webquellen
 2. **Gezeiten-Daten:** Liefert die Marine API für die gewählten Texel-Koordinaten brauchbare Hoch-/Niedrigwasserzeiten? Falls nicht, muss eine verlässliche lokale Tide-Quelle gewählt werden. Die Grafik stellt den zeitlichen Modellverlauf dar und darf nicht als amtliche Vorhersage erscheinen.
 3. **Manifest:** Dateiname, URL, Format und Aktualisierung des Foto-Manifests müssen festgelegt werden.
 4. **OTA-Paket:** Manifestformat, Versionsschema, Signatur/Prüfschlüssel und exakter Firmware-Dateipfad auf dem Server müssen festgelegt werden. Flashpartitionen und maximale Firmwaregröße sind auf dem 4-MB-Gerät nachzuweisen.
-5. **WLAN-Konfiguration:** Der Zugang zur lokalen Konfigurationsoberfläche (zum Beispiel Setup-Modus oder lokales Admin-Passwort) muss festgelegt und gegen unbefugte Änderung geschützt werden.
+5. **Setup-Sicherheit:** Offener Setup-AP und Portal ohne Login sind für die private Nutzung bestätigt; das verbleibende Risiko bei länger aktivem Setup-Modus ist zu beachten.
 
 ## 10. Vorgeschlagene Umsetzungsreihenfolge
 
