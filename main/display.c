@@ -194,6 +194,7 @@ esp_err_t display_init(void)
                            LV_DISPLAY_RENDER_MODE_PARTIAL);
     lv_display_set_flush_cb(lv_display, flush_display);
     screen = lv_screen_active();
+    lv_obj_set_scrollable(screen, false);
     lv_obj_set_style_bg_color(screen, color_from_rgb565(0x0841), 0);
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
 
@@ -362,6 +363,25 @@ esp_err_t display_draw_qr_code(int x, int y, int size, const char *data)
         lv_obj_delete(qr);
         return ESP_FAIL;
     }
+    return ESP_OK;
+}
+
+esp_err_t display_draw_image(int x, int y, const lv_image_dsc_t *image)
+{
+    if (!screen || !image || !image->data || !image->header.w || !image->header.h) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    int width = (int)image->header.w;
+    int height = (int)image->header.h;
+    if (x < 0 || y < 0 || x + width > DISPLAY_WIDTH ||
+        y + height > DISPLAY_HEIGHT) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    lv_obj_t *object = lv_image_create(screen);
+    if (!object) return ESP_ERR_NO_MEM;
+    lv_image_set_src(object, image);
+    lv_obj_set_pos(object, x, y);
     return ESP_OK;
 }
 

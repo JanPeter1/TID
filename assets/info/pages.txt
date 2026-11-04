@@ -1,0 +1,100 @@
+# Willkommen
+@url https://familie-riegel.de/tx94/?Willkommen
+@image source/texelhaus.jpg
+Das Texelhäuschen ist ein gemeinsames Feriendomizil. Bitte helft mit, es sauber und gut in Schuss zu halten.
+
+- Schäden oder Verbesserungen bitte den Gastgebern mitteilen.
+- Im Sommer die Blumen gießen.
+
+---
+# Ankunft
+@url https://familie-riegel.de/tx94/?Ankunft
+@image source/map_detail.png contain
+Slufterweg 94
+Bungalowpark Slufterhoek
+1795 KR De Cocksdorp, Texel
+- Ankunftszeiten bei Bedarf mit den Vorgängern abstimmen.
+
+---
+# Heizung
+@url https://familie-riegel.de/tx94/?Ankunft
+Die Anzeige zeigt die aktuelle Temperatur.
+- Wunschtemperatur am äußeren Ring einstellen und durch Drücken übernehmen.
+- Heizkörper selbst bitte nicht verstellen.
+
+---
+# Gasherd
+@url https://familie-riegel.de/tx94/?Ankunft
+@image source/gas.png
+Der Absperrhahn für den Herd ist im Schrank unter dem Herd.
+- Waagerecht in Richtung der Gasleitung: Gas ist geöffnet.
+- Quer zur Leitung: Gas ist geschlossen.
+
+---
+# Internet
+@url https://familie-riegel.de/tx94/?Ankunft
+@image source/Steckdose_Internet.png
+Den Stecker für die Fritz!Box im Vorratsraum einstecken.
+SSID: Tx94 Guest
+PW: 1795KRDeCocksdort
+
+---
+# Einkaufen
+@url https://familie-riegel.de/tx94/?Auf_Texel
+- Plus: De Cocksdorp
+- Lidl und Jumbo: De Koog
+- Aldi: Den Burg
+- Jumbo: in De Koog und Den Burg
+- Souvenirs gibt es vor allem in Den Burg und De Koog.
+
+---
+# Texel entdecken
+@url https://familie-riegel.de/tx94/?Auf_Texel
+- De Slufter: etwa 30 Minuten zu Fuß vom Haus.
+- Strände: De Krim, De Koog, Eco-Mare und Westerslag.
+- Leuchtturm im Norden der Insel.
+- Hafen und Museum Kaap Skil in Oudeschild.
+- Eco-Mare, Sommeltjespad und Texel Zoo.
+
+---
+# Essen und Trinken
+@url https://familie-riegel.de/tx94/?Auf_Texel
+- Eisbauernhof Labora
+- Café Restaurant De Slufter
+- Catharinahoeve
+- 't Pakhuus
+- De Texelse Visspecialist
+
+---
+# Vor der Abfahrt
+@url https://familie-riegel.de/tx94/?Abfahrt
+Bitte prüfen und bei Bedarf auffüllen:
+- Toilettenpapier und Küchenrolle
+- Putz- und Spülmittel sowie Handseife
+- Mineralwasser
+- Staubsaugerbeutel
+- Brennholz und Holzkohle
+- Nicht verderbliche Vorräte
+
+---
+# Abfahrt: Technik
+@url https://familie-riegel.de/tx94/?Abfahrt
+- Heizung auf 13 °C herunterdrehen.
+- Gas schließen und Wasserzulauf der Spülmaschine abdrehen.
+- Alle Stecker aus den Steckdosen ziehen.
+- Zweitschlüssel im Haus lassen.
+- Kühlschrank ausschalten und Tür offen lassen.
+
+---
+# Abfahrt: Haus
+@url https://familie-riegel.de/tx94/?Abfahrt
+- Verderbliche Lebensmittel mitnehmen; nichts offen stehen lassen.
+- Türen offen stehen lassen.
+- Haus putzen, besonders das Sieb in der Dusche reinigen.
+- Vorhänge zuziehen.
+- Eintrag im Gästebuch nicht vergessen.
+
+---
+# Schlafsofa
+@url https://familie-riegel.de/tx94/?Anleitungen
+Die Anleitung für das Schlafsofa ist als PDF auf der Haus-Infoseite verfügbar.

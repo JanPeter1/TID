@@ -12,6 +12,7 @@
 #include "esp_sleep.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "info_pages.h"
 #include "touch.h"
 #include "web_config.h"
 
@@ -33,7 +34,7 @@ typedef enum {
 
 static page_t active_page;
 static uint8_t active_subpage[PAGE_COUNT];
-static const uint8_t subpage_counts[PAGE_COUNT] = {1, 3, 2, 3, 3};
+static const uint8_t subpage_counts[PAGE_COUNT] = {1, 3, 2, 3, 0};
 static bool setup_credentials_visible;
 static bool qr_visible;
 static bool sleep_pending;
@@ -119,6 +120,7 @@ static uint8_t page_subpage_count(page_t page, const app_data_t *data)
         if (count > DATA_EVENT_COUNT) count = 0;
         return count ? count : 1;
     }
+    if (page == PAGE_INFO) return (uint8_t)info_page_count;
     return subpage_counts[page];
 }
 
@@ -128,7 +130,7 @@ static void draw_subpage_indicator(const app_data_t *data)
     snprintf(indicator, sizeof(indicator), "%u/%u",
              active_subpage[active_page] + 1,
              page_subpage_count(active_page, data));
-    display_text_bg(151, 207, indicator, COLOR_ORANGE, COLOR_BACKGROUND, 1);
+    display_text_bg(151, 225, indicator, COLOR_ORANGE, COLOR_PANEL, 1);
 }
 
 static void draw_wifi_icon(int center_x, int center_y, uint16_t color, int rssi)
@@ -155,6 +157,12 @@ static void draw_qr_icon(int x, int y)
     display_fill_rect(x + 4, y + 4, 2, 2, COLOR_PANEL);
 }
 
+static void draw_close_icon(int x, int y)
+{
+    display_line(x - 4, y - 4, x + 4, y + 4, COLOR_WHITE);
+    display_line(x - 4, y + 4, x + 4, y - 4, COLOR_WHITE);
+}
+
 static void draw_sleep_icon(int x, int y)
 {
     display_fill_circle(x, y, 6, COLOR_WHITE);
@@ -163,12 +171,16 @@ static void draw_sleep_icon(int x, int y)
 
 static void draw_setup_icon(int x, int y, uint16_t color)
 {
-    display_line(x - 5, y + 5, x + 3, y - 3, color);
-    display_line(x - 3, y + 7, x + 5, y - 1, color);
-    display_circle(x - 5, y + 6, 2, color);
-    display_line(x + 2, y - 4, x + 3, y - 8, color);
-    display_line(x + 3, y - 8, x + 8, y - 7, color);
-    display_line(x + 8, y - 7, x + 5, y - 2, color);
+    display_fill_circle(x, y, 5, color);
+    display_fill_rect(x - 2, y - 8, 4, 3, color);
+    display_fill_rect(x - 2, y + 5, 4, 3, color);
+    display_fill_rect(x - 8, y - 2, 3, 4, color);
+    display_fill_rect(x + 5, y - 2, 3, 4, color);
+    display_fill_rect(x - 6, y - 6, 2, 2, color);
+    display_fill_rect(x + 4, y - 6, 2, 2, color);
+    display_fill_rect(x - 6, y + 4, 2, 2, color);
+    display_fill_rect(x + 4, y + 4, 2, 2, color);
+    display_fill_circle(x, y, 2, COLOR_PANEL);
 }
 
 static void draw_status(void)
@@ -188,7 +200,7 @@ static void draw_status(void)
     int rssi = config_wifi_rssi();
     uint16_t wifi_color = !config_wifi_connected() ? 0xF800
         : rssi >= -60 ? COLOR_GREEN : rssi >= -75 ? 0xFFE0 : 0xF800;
-    draw_wifi_icon(176, 232, wifi_color, rssi);
+    draw_wifi_icon(122, 232, wifi_color, rssi);
     if (setup_credentials_visible && xTaskGetTickCount() < setup_visible_until) {
         display_fill_rect(0, 194, DISPLAY_WIDTH, 30, COLOR_ORANGE);
         display_text_bg(4, 194, config_ap_ssid(), COLOR_BACKGROUND, COLOR_ORANGE, 1);
@@ -197,7 +209,11 @@ static void draw_status(void)
     } else {
         setup_credentials_visible = false;
     }
-    draw_qr_icon(241, 232);
+    if (qr_visible) {
+        draw_close_icon(241, 232);
+    } else {
+        draw_qr_icon(241, 232);
+    }
     draw_sleep_icon(272, 232);
     draw_setup_icon(303, 232,
                     config_setup_ap_active() ? COLOR_ORANGE : COLOR_WHITE);
@@ -330,15 +346,15 @@ static void draw_weather_icon(int code, int x, int y, int scale)
 static void draw_weather(const app_data_t *data, uint8_t subpage)
 {
     if (subpage == 2) {
-        display_text(34, 48, "GEZEITEN AUF TEXEL", COLOR_ORANGE, 1);
-        display_text(34, 63, "OPEN-METEO MARINE-MODELL", COLOR_MUTED, 1);
+        display_text(34, 40, "GEZEITEN AUF TEXEL", COLOR_ORANGE, 1);
+        display_text(34, 55, "OPEN-METEO MARINE-MODELL", COLOR_MUTED, 1);
         if (!data->tide_valid) {
             draw_wrapped_text("Gezeitendaten werden geladen oder sind nicht erreichbar.",
-                              34, 88, 5, COLOR_WHITE, 0);
+                              34, 80, 5, COLOR_WHITE, 0);
             return;
         }
-        display_text(34, 86, data->next_tide, COLOR_GREEN, 1);
-        display_text(34, 112, "WASSERSTAND - NAECHSTE 12 STUNDEN",
+        display_text(34, 78, data->next_tide, COLOR_GREEN, 1);
+        display_text(34, 104, "WASSERSTAND - NAECHSTE 12 STUNDEN",
                      COLOR_WHITE, 1);
         float minimum = INFINITY;
         float maximum = -INFINITY;
@@ -350,70 +366,70 @@ static void draw_weather(const app_data_t *data, uint8_t subpage)
             valid_samples++;
         }
         float span = maximum - minimum;
-        display_line(38, 178, 282, 178, COLOR_MUTED);
+        display_line(38, 170, 282, 170, COLOR_MUTED);
         for (int i = 0; i < TIDE_SAMPLES; i++) {
             if (!isfinite(data->tide_samples[i])) continue;
             int height = span > 0.01f
                 ? 8 + (int)(40.0f * (data->tide_samples[i] - minimum) / span)
                 : 28;
-            display_fill_rect(42 + i * 19, 178 - height, 10, height,
+            display_fill_rect(42 + i * 19, 170 - height, 10, height,
                               i == 0 ? COLOR_ORANGE : COLOR_GREEN);
         }
         if (valid_samples) {
             char level_label[32];
             snprintf(level_label, sizeof(level_label), "MIN %.2fM     MAX %.2fM",
                      minimum, maximum);
-            display_text(54, 188, level_label, COLOR_MUTED, 1);
+            display_text(54, 180, level_label, COLOR_MUTED, 1);
         } else {
-            display_text(54, 188, "KEINE VERLAUFSWERTE", COLOR_MUTED, 1);
+            display_text(54, 180, "KEINE VERLAUFSWERTE", COLOR_MUTED, 1);
         }
-        display_text(34, 202, "MODELLWERTE - KEINE NAVIGATIONSDATEN",
+        display_text(34, 194, "MODELLWERTE - KEINE NAVIGATIONSDATEN",
                      COLOR_MUTED, 1);
         return;
     }
 
-    display_text(34, 48, subpage == 0 ? "JETZT AUF TEXEL" : "VORSCHAU - NÄCHSTE 5 TAGE",
+    display_text(34, 40, subpage == 0 ? "JETZT AUF TEXEL" : "VORSCHAU - NÄCHSTE 5 TAGE",
                  COLOR_ORANGE, 1);
-    display_text(220, 48, data->updated_at[11] ? data->updated_at + 11 : "--:--",
+    display_text(220, 40, data->updated_at[11] ? data->updated_at + 11 : "--:--",
                  COLOR_MUTED, 1);
-    display_text(34, 62, "OPEN-METEO.COM", COLOR_MUTED, 1);
+    display_text(34, 54, "OPEN-METEO.COM", COLOR_MUTED, 1);
     if (!data->weather_valid) {
         draw_wrapped_text("Wetterdaten werden geladen oder sind nicht erreichbar.",
-                          34, 84, 5, COLOR_WHITE, 0);
+                          34, 76, 5, COLOR_WHITE, 0);
         return;
     }
     char line[52];
     if (subpage == 0) {
-        draw_weather_icon(data->weather_code, 255, 111, 2);
+        draw_weather_icon(data->weather_code, 255, 103, 2);
         snprintf(line, sizeof(line), "%.1f C", data->temperature_c);
-        display_text(34, 84, line, COLOR_WHITE, 2);
+        display_text(34, 76, line, COLOR_WHITE, 2);
         snprintf(line, sizeof(line), "GEFÜHLT %.1f C", data->feels_like_c);
-        display_text(34, 109, line, COLOR_MUTED, 1);
-        display_text(34, 130, weather_description(data->weather_code), COLOR_ORANGE, 1);
+        display_text(34, 101, line, COLOR_MUTED, 1);
+        display_text(34, 122, weather_description(data->weather_code), COLOR_ORANGE, 1);
         snprintf(line, sizeof(line), "WIND %.0f KM/H  BOEEN %.0f",
                  data->wind_kmh, data->gust_kmh);
-        display_text(34, 151, line, COLOR_WHITE, 1);
+        display_text(34, 143, line, COLOR_WHITE, 1);
         snprintf(line, sizeof(line), "REGEN %.1f MM", data->precipitation_mm);
-        display_text(34, 172, line, COLOR_GREEN, 1);
+        display_text(34, 164, line, COLOR_GREEN, 1);
         snprintf(line, sizeof(line), "LUFTFEUCHTE %d%%", data->humidity_percent);
-        display_text(34, 193, line, COLOR_WHITE, 1);
+        display_text(34, 185, line, COLOR_WHITE, 1);
     } else {
         int displayed_days = 0;
         for (int i = 1; i < DATA_DAYS; i++) {
             if (!data->days[i].date[0]) continue;
             draw_weather_icon(data->days[i].weather_code, 47,
-                              91 + displayed_days * 23, 1);
+                              83 + displayed_days * 23, 1);
             snprintf(line, sizeof(line), "%.5s %-12s %.0f/%.0fC %d%%",
                      data->days[i].date + 5,
                      weather_description(data->days[i].weather_code),
                      data->days[i].high_c, data->days[i].low_c,
                      data->days[i].rain_probability);
-            display_text(63, 83 + displayed_days * 23, line,
+            display_text(63, 75 + displayed_days * 23, line,
                          displayed_days == 0 ? COLOR_ORANGE : COLOR_WHITE, 1);
             displayed_days++;
         }
         if (displayed_days == 0) {
-            display_text(34, 90, "VORHERSAGE NICHT VERFUEGBAR", COLOR_MUTED, 1);
+            display_text(34, 82, "VORHERSAGE NICHT VERFUEGBAR", COLOR_MUTED, 1);
         }
     }
 }
@@ -454,7 +470,8 @@ static void current_page_url(const app_data_t *data, char *url, size_t url_size)
                  : "https://open-meteo.com/en/docs");
         break;
     case PAGE_INFO:
-        snprintf(url, url_size, "%s", "https://familie-riegel.de/tx94/");
+        snprintf(url, url_size, "%s",
+                 info_pages[active_subpage[active_page]].url);
         break;
     default:
         snprintf(url, url_size, "%s", "https://www.texel.net/");
@@ -471,93 +488,107 @@ static void draw_qr_code(const char *url)
     }
 }
 
+static void draw_info_page(void)
+{
+    const info_page_t *page = &info_pages[active_subpage[PAGE_INFO]];
+    display_text(34, 40, page->title, COLOR_ORANGE, 1);
+    if (page->image) {
+        display_fill_rect(200, 65, 84, 64, COLOR_PANEL);
+        esp_err_t err = display_draw_image(202, 67, page->image);
+        if (err != ESP_OK) {
+            ESP_LOGE("ui", "Could not draw info image: %s", esp_err_to_name(err));
+        }
+    }
+    for (size_t i = 0; i < INFO_PAGE_MAX_LINES && page->lines[i]; i++) {
+        display_text(34, 61 + (int)i * 14, page->lines[i], COLOR_WHITE, 1);
+    }
+}
+
 static void draw_page(const app_data_t *data)
 {
     display_draw_frame();
     draw_tabs();
     if (qr_visible) {
+        static const char *page_names[PAGE_COUNT] = {
+            "HEUTE", "KALENDER", "FOTOS", "WETTER", "INFO"
+        };
         char url[DATA_EVENT_URL_LENGTH + 32];
+        char title[32];
         current_page_url(data, url, sizeof(url));
+        snprintf(title, sizeof(title), "QR-CODE: %s", page_names[active_page]);
         display_fill_rect(28, 34, 266, 188, COLOR_BACKGROUND);
-        display_text(34, 40, "QR-CODE DIESER UNTERSEITE", COLOR_ORANGE, 1);
+        display_text(34, 40, title, COLOR_ORANGE, 1);
         draw_qr_code(url);
         draw_wrapped_text(url, 34, 185, 2, COLOR_MUTED, 0);
         draw_side_buttons();
-        draw_subpage_indicator(data);
         draw_status();
+        draw_subpage_indicator(data);
         return;
     }
     switch (active_page) {
     case PAGE_CURRENT:
         if (data->event_count && active_subpage[active_page] < data->event_count) {
             const texel_event_t *event = &data->events[active_subpage[active_page]];
-            display_text(34, 48, event->day_offset ? "MORGEN AUF TEXEL" : "HEUTE AUF TEXEL",
+            display_text(34, 40, event->day_offset ? "MORGEN AUF TEXEL" : "HEUTE AUF TEXEL",
                          COLOR_ORANGE, 1);
             char event_date[32];
             snprintf(event_date, sizeof(event_date), "%.2s.%.2s.%.4s  %s",
                      event->date + 8, event->date + 5, event->date,
                      event->time[0] ? event->time : "ZEIT N.N.");
-            display_text(34, 64, event_date, COLOR_MUTED, 1);
-            draw_wrapped_text(event->title, 34, 84, 4, COLOR_WHITE, 0);
+            display_text(34, 56, event_date, COLOR_MUTED, 1);
+            draw_wrapped_text(event->title, 34, 76, 4, COLOR_WHITE, 0);
             if (event->place[0]) {
-                display_text(34, 142, "ORT", COLOR_ORANGE, 1);
-                draw_wrapped_text(event->place, 34, 154, 2, COLOR_WHITE, 0);
+                display_text(34, 134, "ORT", COLOR_ORANGE, 1);
+                draw_wrapped_text(event->place, 34, 146, 2, COLOR_WHITE, 0);
             }
             if (event->description[0]) {
                 draw_wrapped_text(event->description, 34,
-                                  event->place[0] ? 180 : 150, 3, COLOR_MUTED, 0);
+                                  event->place[0] ? 172 : 142, 3, COLOR_MUTED, 0);
             }
         } else if (data->events_valid) {
-            display_text(34, 48, "HEUTE & MORGEN", COLOR_ORANGE, 1);
-            display_text(34, 78, "KEINE VERANSTALTUNGEN GEFUNDEN", COLOR_WHITE, 1);
+            display_text(34, 40, "HEUTE & MORGEN", COLOR_ORANGE, 1);
+            display_text(34, 70, "KEINE VERANSTALTUNGEN GEFUNDEN", COLOR_WHITE, 1);
         } else {
-            display_text(34, 48, "VERANSTALTUNGEN", COLOR_ORANGE, 1);
-            display_text(34, 78, "VVV-DATEN WERDEN GELADEN", COLOR_WHITE, 1);
+            display_text(34, 40, "VERANSTALTUNGEN", COLOR_ORANGE, 1);
+            display_text(34, 70, "VVV-DATEN WERDEN GELADEN", COLOR_WHITE, 1);
         }
-        display_text(34, 202, "QUELLE: TEXEL.NET", COLOR_MUTED, 1);
+        display_text(34, 194, "QUELLE: TEXEL.NET", COLOR_MUTED, 1);
         break;
     case PAGE_CALENDAR:
         {
             char title[32];
             snprintf(title, sizeof(title), "TEXELKALENDER - TEIL %u",
                      active_subpage[active_page] + 1);
-            display_text(34, 48, title, COLOR_ORANGE, 1);
+            display_text(34, 40, title, COLOR_ORANGE, 1);
         }
-        display_text(34, 64, data->calendar_valid ? "LETZTER ABRUF:" : "WARTET AUF ABRUF",
+        display_text(34, 56, data->calendar_valid ? "LETZTER ABRUF:" : "WARTET AUF ABRUF",
                      COLOR_MUTED, 1);
-        draw_wrapped_text(data->calendar, 34, 82, 10, COLOR_WHITE,
+        draw_wrapped_text(data->calendar, 34, 74, 10, COLOR_WHITE,
                           (size_t)active_subpage[active_page] * 340);
         break;
     case PAGE_PHOTOS:
-        display_text(34, 48, active_subpage[active_page] == 0
+        display_text(34, 40, active_subpage[active_page] == 0
                      ? "FOTOS VON TEXEL - 1" : "FOTOS VON TEXEL - 2",
                      COLOR_ORANGE, 1);
-        display_fill_rect(32, 68, 256, 137, COLOR_PANEL);
-        display_text(46, 86, active_subpage[active_page] == 0
+        display_fill_rect(32, 60, 256, 137, COLOR_PANEL);
+        display_text(46, 78, active_subpage[active_page] == 0
                      ? "ZUFALLSFOTO 1" : "ZUFALLSFOTO 2", COLOR_WHITE, 1);
-        display_text(46, 105, "NOCH NICHT BEREIT", COLOR_ORANGE, 1);
-        display_text(46, 128, "JPEG 320 X 200 PX", COLOR_MUTED, 1);
-        display_text(46, 150, "MANIFEST URL FESTLEGEN", COLOR_MUTED, 1);
+        display_text(46, 97, "NOCH NICHT BEREIT", COLOR_ORANGE, 1);
+        display_text(46, 120, "JPEG 320 X 200 PX", COLOR_MUTED, 1);
+        display_text(46, 142, "MANIFEST URL FESTLEGEN", COLOR_MUTED, 1);
         break;
     case PAGE_WEATHER:
         draw_weather(data, active_subpage[active_page]);
         break;
     case PAGE_INFO:
-        {
-            char title[32];
-            snprintf(title, sizeof(title), "HAUS-INFOS - TEIL %u",
-                     active_subpage[active_page] + 1);
-            display_text(34, 48, title, COLOR_ORANGE, 1);
-        }
-        draw_wrapped_text(data->home_info, 34, 69, 11, COLOR_WHITE,
-                          (size_t)active_subpage[active_page] * 374);
+        draw_info_page();
         break;
     default:
         break;
     }
     draw_side_buttons();
-    draw_subpage_indicator(data);
     draw_status();
+    draw_subpage_indicator(data);
 }
 
 static void app_main_task(void *unused)
@@ -569,6 +600,7 @@ static void app_main_task(void *unused)
     bool refresh_sent = false;
     page_t previous_page = PAGE_COUNT;
     uint8_t previous_subpage = UINT8_MAX;
+    bool previous_qr_visibility = false;
     bool previous_setup_visibility = false;
     int previous_clock_minute = -1;
     bool previous_clock_valid = false;
@@ -668,21 +700,23 @@ static void app_main_task(void *unused)
                              clock_minute != previous_clock_minute;
         bool page_changed = active_page != previous_page ||
                             active_subpage[active_page] != previous_subpage ||
+                            qr_visible != previous_qr_visibility ||
                             show_setup != previous_setup_visibility ||
                             memcmp(&snapshot, &previous, sizeof(snapshot)) != 0;
         if (page_changed) {
             draw_page(&snapshot);
             if (snapshot.from_cache) {
-                display_text_bg(122, 225, "CACHE", COLOR_ORANGE, COLOR_PANEL, 1);
+                display_text_bg(176, 225, "CACHE", COLOR_ORANGE, COLOR_PANEL, 1);
             }
             previous = snapshot;
             previous_page = active_page;
             previous_subpage = active_subpage[active_page];
+            previous_qr_visibility = qr_visible;
             previous_setup_visibility = show_setup;
         } else if (clock_changed) {
             draw_page(&snapshot);
             if (snapshot.from_cache) {
-                display_text_bg(122, 225, "CACHE", COLOR_ORANGE, COLOR_PANEL, 1);
+                display_text_bg(176, 225, "CACHE", COLOR_ORANGE, COLOR_PANEL, 1);
             }
         }
         previous_clock_minute = clock_minute;

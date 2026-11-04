@@ -170,6 +170,118 @@ static const char *json_string(cJSON *object, const char *key)
     return cJSON_IsString(item) ? item->valuestring : NULL;
 }
 
+static void append_utf8(char **destination, uint32_t codepoint)
+{
+    if (codepoint <= 0x7F) {
+        *(*destination)++ = (char)codepoint;
+    } else if (codepoint <= 0x7FF) {
+        *(*destination)++ = (char)(0xC0 | (codepoint >> 6));
+        *(*destination)++ = (char)(0x80 | (codepoint & 0x3F));
+    } else if (codepoint <= 0xFFFF &&
+               !(codepoint >= 0xD800 && codepoint <= 0xDFFF)) {
+        *(*destination)++ = (char)(0xE0 | (codepoint >> 12));
+        *(*destination)++ = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+        *(*destination)++ = (char)(0x80 | (codepoint & 0x3F));
+    } else if (codepoint <= 0x10FFFF) {
+        *(*destination)++ = (char)(0xF0 | (codepoint >> 18));
+        *(*destination)++ = (char)(0x80 | ((codepoint >> 12) & 0x3F));
+        *(*destination)++ = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+        *(*destination)++ = (char)(0x80 | (codepoint & 0x3F));
+    } else {
+        *(*destination)++ = '?';
+    }
+}
+
+static bool decode_html_entity(const char *text, uint32_t *codepoint,
+                              size_t *consumed)
+{
+    static const struct {
+        const char *entity;
+        uint32_t codepoint;
+    } entities[] = {
+        {"&amp;", '&'}, {"&apos;", '\''}, {"&gt;", '>'}, {"&lt;", '<'},
+        {"&quot;", '"'}, {"&nbsp;", ' '}, {"&auml;", 0x00E4},
+        {"&Auml;", 0x00C4}, {"&ouml;", 0x00F6}, {"&Ouml;", 0x00D6},
+        {"&uuml;", 0x00FC}, {"&Uuml;", 0x00DC}, {"&szlig;", 0x00DF},
+        {"&eacute;", 0x00E9},
+        {"&euro;", 0x20AC}, {"&ndash;", 0x2013}, {"&mdash;", 0x2014},
+        {"&hellip;", 0x2026}, {"&rsquo;", 0x2019}, {"&lsquo;", 0x2018},
+        {"&rdquo;", 0x201D}, {"&ldquo;", 0x201C},
+    };
+
+    if (text[0] != '&') return false;
+    for (size_t i = 0; i < sizeof(entities) / sizeof(entities[0]); i++) {
+        size_t length = strlen(entities[i].entity);
+        if (strncmp(text, entities[i].entity, length) == 0) {
+            *codepoint = entities[i].codepoint;
+            *consumed = length;
+            return true;
+        }
+    }
+
+    if (text[1] != '#') return false;
+    size_t index = 2;
+    unsigned int base = 10;
+    if (text[index] == 'x' || text[index] == 'X') {
+        base = 16;
+        index++;
+    }
+    uint32_t value = 0;
+    size_t digits = 0;
+    while (text[index] && text[index] != ';') {
+        unsigned char ch = (unsigned char)text[index];
+        unsigned int digit;
+        if (ch >= '0' && ch <= '9') digit = ch - '0';
+        else if (base == 16 && ch >= 'a' && ch <= 'f') digit = ch - 'a' + 10;
+        else if (base == 16 && ch >= 'A' && ch <= 'F') digit = ch - 'A' + 10;
+        else return false;
+        if (digit >= base || value > (0x10FFFFU - digit) / base) return false;
+        value = value * base + digit;
+        digits++;
+        index++;
+    }
+    if (!digits || text[index] != ';' || value == 0 ||
+        (value >= 0xD800 && value <= 0xDFFF)) {
+        return false;
+    }
+    *codepoint = value;
+    *consumed = index + 1;
+    return true;
+}
+
+static size_t valid_utf8_sequence_length(const unsigned char *text)
+{
+    unsigned char first = text[0];
+    if (first < 0x80) return 1;
+
+    size_t length;
+    uint32_t codepoint;
+    if (first >= 0xC2 && first <= 0xDF) {
+        length = 2;
+        codepoint = first & 0x1F;
+    } else if (first >= 0xE0 && first <= 0xEF) {
+        length = 3;
+        codepoint = first & 0x0F;
+    } else if (first >= 0xF0 && first <= 0xF4) {
+        length = 4;
+        codepoint = first & 0x07;
+    } else {
+        return 0;
+    }
+
+    for (size_t i = 1; i < length; i++) {
+        if (!text[i] || (text[i] & 0xC0) != 0x80) return 0;
+        codepoint = (codepoint << 6) | (text[i] & 0x3F);
+    }
+    if ((length == 3 && codepoint < 0x800) ||
+        (length == 4 && codepoint < 0x10000) ||
+        codepoint > 0x10FFFF ||
+        (codepoint >= 0xD800 && codepoint <= 0xDFFF)) {
+        return 0;
+    }
+    return length;
+}
+
 static bool event_dates(char today[11], char tomorrow[11])
 {
     time_t now = time(NULL);
@@ -205,7 +317,16 @@ static void copy_event_field(char *destination, size_t size, const char *source)
         if (size) destination[0] = '\0';
         return;
     }
-    snprintf(destination, size, "%s", source);
+    size_t source_length = strlen(source);
+    size_t copy_length = source_length < size - 1 ? source_length : size - 1;
+    if (copy_length < source_length) {
+        while (copy_length &&
+               ((unsigned char)source[copy_length] & 0xC0) == 0x80) {
+            copy_length--;
+        }
+    }
+    memcpy(destination, source, copy_length);
+    destination[copy_length] = '\0';
     html_to_text(destination);
 }
 
@@ -483,30 +604,22 @@ static void html_to_text(char *html)
         } else if (*read == '>') {
             in_tag = false;
         } else if (!in_tag) {
-            if (read[0] == '&' && strncmp(read, "&nbsp;", 6) == 0) {
-                *write++ = ' ';
-                read += 5;
-            } else if (read[0] == '&' && strncmp(read, "&amp;", 5) == 0) {
-                *write++ = '&';
-                read += 4;
-            } else if (read[0] == '&' && strncmp(read, "&uuml;", 6) == 0) {
-                *write++ = 'u';
-                read += 5;
-            } else if (read[0] == '&' && strncmp(read, "&auml;", 6) == 0) {
-                *write++ = 'a';
-                read += 5;
-            } else if (read[0] == '&' && strncmp(read, "&ouml;", 6) == 0) {
-                *write++ = 'o';
-                read += 5;
-            } else if (read[0] == '&' && strncmp(read, "&szlig;", 7) == 0) {
-                *write++ = 's';
-                *write++ = 's';
-                read += 6;
-            } else if ((unsigned char)*read < 0x80) {
-                *write++ = *read;
+            uint32_t codepoint;
+            size_t entity_length;
+            if (*read == '&' &&
+                decode_html_entity(read, &codepoint, &entity_length)) {
+                append_utf8(&write, codepoint);
+                read += entity_length - 1;
             } else {
-                *write++ = '?';
-                while (((unsigned char)*read & 0xC0) == 0x80) read++;
+                size_t sequence_length =
+                    valid_utf8_sequence_length((const unsigned char *)read);
+                if (!sequence_length) {
+                    *write++ = '?';
+                } else {
+                    memmove(write, read, sequence_length);
+                    write += sequence_length;
+                    read += sequence_length - 1;
+                }
             }
         }
         read++;
@@ -526,7 +639,7 @@ static void html_to_text(char *html)
 }
 
 static void fetch_page(const char *url, const char *username, const char *password,
-                       char *destination, size_t destination_size, bool calendar)
+                       char *destination, size_t destination_size)
 {
     char *response = calloc(1, RESPONSE_LIMIT);
     if (!response) return;
@@ -534,8 +647,7 @@ static void fetch_page(const char *url, const char *username, const char *passwo
         html_to_text(response);
         xSemaphoreTake(data_lock, portMAX_DELAY);
         snprintf(destination, destination_size, "%s", response);
-        if (calendar) current_data.calendar_valid = destination[0] != '\0';
-        else current_data.home_info_valid = destination[0] != '\0';
+        current_data.calendar_valid = destination[0] != '\0';
         current_data.from_cache = false;
         xSemaphoreGive(data_lock);
     }
@@ -564,13 +676,11 @@ static void fetch_all(void)
 
     device_config_t config;
     if (config_load(&config) == ESP_OK) {
-        char user_info[DATA_TEXT_LENGTH];
         char calendar[DATA_TEXT_LENGTH];
-        fetch_page("https://familie-riegel.de/tx94/", NULL, NULL, user_info, sizeof(user_info), false);
         if (config.calendar_user[0] && config.calendar_password[0]) {
             fetch_page("https://familie-riegel.de/tx94/?Texel-Kalender",
                        config.calendar_user, config.calendar_password,
-                       calendar, sizeof(calendar), true);
+                       calendar, sizeof(calendar));
         } else {
             ESP_LOGI(TAG, "Calendar credentials are not configured");
         }

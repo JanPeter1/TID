@@ -17,7 +17,8 @@ Die Inhalte werden, soweit möglich, regelmäßig aus den angegebenen Webquellen
 - **LVGL-Umstellung implementiert, Hardwareverhalten noch zu prüfen:** LVGL 9.6 mit partiellem RGB565-Framebuffer, SPI-Flush für das ILI9341 und XPT2046 als Pointer-Eingabe. Die UI verwendet scharfe Montserrat-Schriften mit Noto-Sans-Glyphen für `äöüÄÖÜß`.
 - **Implementiert, Hardwareverhalten noch zu prüfen:** Wetter-/Marineabruf mit den Seiten „Jetzt“, Fünf-Tage-Vorschau und Gezeitenverlauf, Cache, NTP-Synchronisierung nach WLAN-Verbindung und lokales Setup-Portal ohne Login.
 - **Implementiert, Hardwareverhalten noch zu prüfen:** VVV-GraphQL-Abruf, Filterung auf heute/morgen und eine Unterseite je Event (maximal 12 gespeicherte Events); Wetteransichten mit gezeichneten Wetter-Icons.
-- **Noch offen:** VVV-Abruf und Cache auf dem Gerät nach Flashen der aktualisierten Partitionstabelle verifizieren, Ausflugsziele, Fotos/Manifest, gezieltes HTML-Parsing der Haus-/Kalenderseiten, Anzeige verlässlicher Aktualisierungszeitpunkte und OTA-Update-Logik.
+- **Noch offen:** VVV-Abruf und Cache auf dem Gerät nach Flashen der aktualisierten Partitionstabelle verifizieren, Fotos/Manifest, gezieltes HTML-Parsing der Kalenderseite, Anzeige verlässlicher Aktualisierungszeitpunkte und OTA-Update-Logik.
+- **Implementiert, Hardwareverhalten noch zu prüfen:** Offline-Infoseiten aus `assets/info/pages.txt` mit Absätzen, Listen und optionalen 80 x 60 RGB565-Bildern. Referenzierte Quelldateien unter `assets/info/source/` werden bei Bedarf beim Build skaliert; ein QR-Code führt zur jeweiligen Quellseite.
 - Die aktuelle Refresh-Implementierung verwendet ein Sechs-Stunden-Intervall und startet Abrufe erst nach `IP_EVENT_STA_GOT_IP`; die anfängliche Aktualisierung bleibt während DHCP ausstehend und wird nach erhaltener IP ausgeführt. Große HTTP-Antwortpuffer liegen auf dem Heap. Nach wiederholt gemeldeten Abstürzen im LWIP-TCP/IP-Task wurden dessen Stack auf 8 KB erhöht und Compiler-Stackschutz sowie leichtgewichtige Heap-Prüfung aktiviert. Laufzeitstabilität ist nach erneutem Flashen zu verifizieren; die Firmware protokolliert außerdem den verbleibenden Stack der UI- und Daten-Tasks.
 
 ## 2. Ziele
@@ -103,10 +104,11 @@ Die Inhalte werden, soweit möglich, regelmäßig aus den angegebenen Webquellen
 
 ### 5.5 Infos
 
-- Zeigt Informationen von `https://familie-riegel.de/tx94`.
-- Inhalte werden dynamisch aktualisiert und für das Display lesbar aufbereitet.
-- Die Informationen sind ohne Anmeldung zugänglich. Welche konkreten Seitenbereiche einzubeziehen sind, wird bei der Implementierung anhand der stabilen HTML-Struktur festgelegt.
-- Bei längeren Inhalten muss Navigation/Scrollen möglich sein; externe Links können auf dem Gerät als URL oder QR-Code dargestellt werden, sofern sinnvoll.
+- Zeigt Haus-, Ankunfts-, Abreise- und Texelhinweise aus `https://familie-riegel.de/tx94`.
+- Die Seiten werden zur Build-Zeit aus `assets/info/pages.txt` als Firmware-Daten generiert. Sie stehen deshalb ohne WLAN zur Verfügung und werden durch einen Firmware-Build aktualisiert.
+- Das einfache Textformat unterstützt Absätze, `- `-Listen und optional je Seite ein festes 80 x 60 RGB565-Bild. Der Generator prüft die Bildgröße und den verfügbaren Textzeilenraum.
+- Seitliche Navigation blättert zwischen den erzeugten Unterseiten; der QR-Code öffnet die Quellseite der aktiven Unterseite.
+- Inhalte der öffentlichen Quellseiten werden für das kleine Display knapp zusammengefasst. Private Kontakt- und Bankdaten werden nicht in die Firmware übernommen.
 
 ### 5.6 Aktualisierung und Offline-Verhalten
 

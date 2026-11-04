@@ -35,7 +35,6 @@ typedef struct {
 typedef struct {
     bool weather_valid;
     bool tide_valid;
-    bool home_info_valid;
     bool calendar_valid;
     bool events_valid;
     bool from_cache;
@@ -53,7 +52,6 @@ typedef struct {
     weather_day_t days[DATA_DAYS];
     uint8_t event_count;
     texel_event_t events[DATA_EVENT_COUNT];
-    char home_info[DATA_TEXT_LENGTH];
     char calendar[DATA_TEXT_LENGTH];
 } app_data_t;
 

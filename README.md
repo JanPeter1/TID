@@ -11,11 +11,16 @@ ESP-IDF firmware for the ESP32-2432S028 CYD (320 x 240 ILI9341 display and XPT20
 - VVV events are fetched from the page's public GraphQL endpoint; up to 12 today/tomorrow timeslots are cached and shown one per subpage. The compact query requests titles, places, detail slugs, and times only.
 - The status bar shows Wi-Fi connection quality through colored signal bars, without a numeric RSSI value. The Wi-Fi icon sits left of the icon-only setup (wrench), QR, and deep-sleep controls. LVGL's QR widget opens the source URL for the selected subpage; touch on the XPT2046 wakes the device from deep sleep.
 - NVS-backed Wi-Fi/calendar configuration through a local setup portal; the larger content cache uses its own flash NVS partition.
+- House information is compiled from `assets/info/pages.txt`; paragraphs, bullet lists, and optional fixed-size images become offline-ready subpages with source-specific QR links.
 - SNTP time synchronization after the station receives an IP address; local time follows `Europe/Amsterdam`. The status bar shows time in orange followed by date in white.
 - Stack protection and light heap poisoning are enabled to help catch the reported intermittent FreeRTOS/LWIP crash; the TCP/IP stack is increased to 8 KB. Device stability still needs verification after flashing.
 - Dual OTA application partitions exist, but OTA update logic is not implemented.
 
-VVV sightseeing recommendations and photo loading are not implemented. House/calendar HTML currently uses a minimal text conversion rather than site-specific parsing; the UI labels unavailable content instead of inventing it.
+VVV sightseeing recommendations and photo loading are not implemented. The calendar still uses a minimal HTML-to-text conversion.
+
+## Editing house information
+
+Edit `assets/info/pages.txt`; each `#` heading starts a subpage. Add one `@url` source link, an optional `@image source/<datei>` (optional `fit` or `contain` mode), then plain paragraphs or `- ` list items. Separate pages with `---`. The build-time generator checks that each page fits the display, scales referenced files from `assets/info/source/` to fixed 80 x 60 RGB565 files under `assets/info/images/`, and embeds the result in firmware. It reuses scaled files unless the source is newer or the output is missing or invalid. Original downloads from `familie-riegel.de/tx94/userfiles/images/` are kept under `assets/info/source/`.
 
 ## Build and flash
 
@@ -39,7 +44,7 @@ The setup network and portal are both open and use HTTP without TLS. Anyone near
 
 - Weather: Open-Meteo Forecast API at 53.124279, 4.812830. The display shows current temperature, wind/gusts, precipitation, humidity, and a five-day daily forecast. Requests run on startup when connected and every six hours thereafter. Open-Meteo is for non-commercial use and requires CC BY attribution.
 - Marine: Open-Meteo Marine API. The firmware finds the next modeled local water-level extremum after the current forecast time and shows it with a 12-hour trend. Coastal model levels are approximate and must not be used for navigation or safety decisions.
-- House information and calendar: endpoints are in `main/data.c`; calendar credentials are entered through setup. HTML parsing is currently a simple text fallback.
+- House information: compile-time pages and scaled thumbnails are in `assets/info/`; their QR codes open the corresponding source page. Calendar: endpoint is in `main/data.c`, credentials are entered through setup, and HTML parsing is currently a simple text fallback.
 - Events: VVV Texel German event overview. A compact GraphQL request retrieves timeslots in the local date range; matching entries are filtered to today and tomorrow and up to 12 are stored.
 - Photos: awaiting a confirmed source/manifest format.
 
@@ -54,4 +59,5 @@ HTTPS data requests use the ESP-IDF certificate bundle. Do not commit Wi-Fi or c
 - `main/config.c` / `main/config.h`: Wi-Fi, NVS settings, setup AP, and SNTP startup.
 - `main/web_config.c` / `main/web_config.h`: local setup portal.
 - `main/data.c` / `main/data.h`: remote requests, parsing, refresh task, and cache.
+- `assets/info/pages.txt` and `tools/generate_info_pages.py`: source format and build-time generator for the offline information pages.
 - `partitions.csv`: 4 MB flash layout with dual OTA application slots and a dedicated content-cache NVS partition. Flash the partition table along with the firmware after changing this layout.
