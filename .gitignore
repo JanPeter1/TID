@@ -6,3 +6,6 @@ managed_components/
 secrets.h
 *.pem
 *.key
+.env
+.env.*
+!.env.example

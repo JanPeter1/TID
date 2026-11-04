@@ -17,7 +17,8 @@ Die Inhalte werden, soweit möglich, regelmäßig aus den angegebenen Webquellen
 - **LVGL-Umstellung implementiert, Hardwareverhalten noch zu prüfen:** LVGL 9.6 mit partiellem RGB565-Framebuffer, SPI-Flush für das ILI9341 und XPT2046 als Pointer-Eingabe. Die UI verwendet scharfe Montserrat-Schriften mit Noto-Sans-Glyphen für `äöüÄÖÜß`.
 - **Implementiert, Hardwareverhalten noch zu prüfen:** Wetter-/Marineabruf mit den Seiten „Jetzt“, Fünf-Tage-Vorschau und Gezeitenverlauf, Cache, NTP-Synchronisierung nach WLAN-Verbindung und lokales Setup-Portal ohne Login.
 - **Implementiert, Hardwareverhalten noch zu prüfen:** VVV-GraphQL-Abruf, Filterung auf heute/morgen und eine Unterseite je Event (maximal 12 gespeicherte Events); Wetteransichten mit gezeichneten Wetter-Icons.
-- **Noch offen:** VVV-Abruf und Cache auf dem Gerät nach Flashen der aktualisierten Partitionstabelle verifizieren, Fotos/Manifest, gezieltes HTML-Parsing der Kalenderseite, Anzeige verlässlicher Aktualisierungszeitpunkte und OTA-Update-Logik.
+- **Noch offen:** VVV-Abruf und Cache auf dem Gerät nach Flashen der aktualisierten Partitionstabelle verifizieren, gezieltes HTML-Parsing der Kalenderseite, Anzeige verlässlicher Aktualisierungszeitpunkte und OTA-Update-Logik.
+- **Implementiert, Hardwareverhalten noch zu prüfen:** Fotoverarbeitung mit EXIF-Datum/GPS-Ortsauflösung und JSON-Manifest; zufälliger HTTPS-Abruf beim Öffnen einer Foto-Unterseite und JPEG-Anzeige über LVGL/TJPGD.
 - **Implementiert, Hardwareverhalten noch zu prüfen:** Offline-Infoseiten aus `assets/info/pages.txt` mit Absätzen, Listen und optionalen 80 x 60 RGB565-Bildern. Referenzierte Quelldateien unter `assets/info/source/` werden bei Bedarf beim Build skaliert; ein QR-Code führt zur jeweiligen Quellseite.
 - Die aktuelle Refresh-Implementierung verwendet ein Sechs-Stunden-Intervall und startet Abrufe erst nach `IP_EVENT_STA_GOT_IP`; die anfängliche Aktualisierung bleibt während DHCP ausstehend und wird nach erhaltener IP ausgeführt. Große HTTP-Antwortpuffer liegen auf dem Heap. Nach wiederholt gemeldeten Abstürzen im LWIP-TCP/IP-Task wurden dessen Stack auf 8 KB erhöht und Compiler-Stackschutz sowie leichtgewichtige Heap-Prüfung aktiviert. Laufzeitstabilität ist nach erneutem Flashen zu verifizieren; die Firmware protokolliert außerdem den verbleibenden Stack der UI- und Daten-Tasks.
 
@@ -53,7 +54,7 @@ Die Inhalte werden, soweit möglich, regelmäßig aus den angegebenen Webquellen
   4. **Wetter**
   5. **Infos**
 - Jeder Hauptbereich besitzt mehrere Unterseiten. Abgerundete seitliche `<`- und `>`-Schaltflächen blättern ausschließlich innerhalb des ausgewählten Bereichs; eine Seitenanzeige zeigt die aktuelle Position. Ein Wechsel des Hauptbereichs startet auf dessen erster Unterseite.
-- Die Statusleiste zeigt den WLAN-Status und die Signalqualität ausschließlich über farbige Balken: grün ab -60 dBm, gelb ab -75 dBm, darunter beziehungsweise ohne Verbindung rot; ein numerischer RSSI-Wert wird nicht angezeigt. Das WLAN-Symbol steht links von Setup (Schraubenschlüssel), Deep Sleep und QR-Code; diese bleiben reine Icon-Schaltflächen.
+- Die Statusleiste zeigt den WLAN-Status und die Signalqualität ausschließlich über farbige Balken: grün ab -60 dBm, gelb ab -75 dBm, darunter beziehungsweise ohne Verbindung rot; ein numerischer RSSI-Wert wird nicht angezeigt. Das WLAN-Symbol steht links von Setup (Zahnrad), Deep Sleep und QR-Code; diese bleiben reine Icon-Schaltflächen.
 - Der Deep-Sleep-Modus wird über den Touch-IRQ des XPT2046 beendet. Vor dem Einschlafen wartet das Gerät auf das Loslassen des Touchfelds.
 - Die QR-Schaltfläche zeigt einen QR-Code zur Quelle der aktuellen Unterseite, inklusive individueller Event-URL, sofern die Veranstaltungsdaten eine solche enthalten.
 - Die Touch-Zonen der seitlichen Navigation erstrecken sich zur einfacheren Bedienung über die gesamte Höhe des Inhaltsbereichs; die sichtbaren Pfeil-Schaltflächen bleiben kompakt und abgerundet.
@@ -82,12 +83,11 @@ Die Inhalte werden, soweit möglich, regelmäßig aus den angegebenen Webquellen
 
 ### 5.3 Fotos
 
-- Zeigt zufällig ausgewählte Bilder aus `https://familie-riegel.de/tx94/photos/320x200`.
-- Die Bildquelle wird laut Nutzerangabe noch eingerichtet.
-- Empfohlenes Bildformat und -maß: JPEG mit 320 × 200 Pixeln, passend zum vorgesehenen Fotoverzeichnis. Zielgröße möglichst höchstens 100 KB pro Bild; die konkrete Qualität ist gegen sichtbare Artefakte und Downloadzeit zu prüfen.
-- Bilder werden ohne Verzerrung angezeigt; bei mehreren verfügbaren Bildern erfolgt eine zufällige Auswahl beziehungsweise Rotation.
-- Der Abruf muss mit dem Speicher- und Bandbreitenbudget des ESP32 vereinbar sein. Fehlerhafte oder nicht unterstützte Bilder dürfen die übrige Oberfläche nicht blockieren.
-- Vor Umsetzung ist zu klären, wie die Bilddateien in diesem Pfad aufgelistet werden können (Indexseite, Manifest oder API).
+- `tools/process_photos.py` verarbeitet Bilder aus `assets/photos/source/` und schreibt 256 × 137 baseline-JPEGs bis 24 KiB sowie `assets/photos/images/manifest.json` mit relativen Pfaden, ISO-Datum und Titel.
+- Das Datum stammt aus EXIF `DateTimeOriginal`, ersatzweise aus dem Dateierstellungsdatum. Der Titel wird anhand von EXIF-GPS über Nominatim/OpenStreetMap aufgelöst; ohne GPS beziehungsweise bei einem Lookup-Fehler wird der Dateiname oder die Koordinate verwendet.
+- Fehlende und gegenüber der Quelle neuere Bilder werden neu skaliert; unveränderte Ausgaben bleiben erhalten. Das vollständige Verzeichnis `assets/photos/images/` wird manuell per FTP nach `ftp://familie-riegel-de@ftp.familie-riegel.de/tx94/photos/` hochgeladen. FTP-Zugangsdaten werden nicht in versionierte Dateien eingetragen.
+- Die Firmware lädt Manifest und jeweils ausgewähltes Foto über HTTPS von `https://familie-riegel.de/tx94/photos/`. Beim Öffnen oder Wechseln einer Foto-Unterseite wird ein zufälliger Eintrag ausgewählt. JPEG wird mit LVGL/TJPGD in kleinen Kacheln decodiert, damit kein vollständiger RGB565-Bildpuffer benötigt wird.
+- Fehlerhafte oder nicht unterstützte Bilder dürfen die übrige Oberfläche nicht blockieren.
 - eventuell hier auch eine einbindung von webcams auf texel (zu finden auf der Webseite des VVV Texel).
 
 ### 5.4 Wetter und Gezeiten
@@ -166,7 +166,7 @@ Die Inhalte werden, soweit möglich, regelmäßig aus den angegebenen Webquellen
 - **Wetterbetrieb:** ausschließlich privates Projekt; Open-Meteo Free ist damit als Anbieter vorgesehen, sofern die Nutzungsbedingungen unverändert passen. CC-BY-Quellenangabe bleibt erforderlich.
 - **Gezeiten:** Hoch- und Niedrigwasserzeiten sowie möglichst eine einfache Grafik. Modellwerte der Marine API sind als Orientierung zu kennzeichnen; die Eignung und der Bezugsort auf Texel müssen noch anhand der API-Daten validiert werden.
 - **Webseiten:** Kalender ist passwortgeschützt, Infos sind öffentlich. Für beide Seiten gibt es keine API; die HTML-Struktur ist stabil. Der Abruf erfolgt durch gezieltes Parsen der HTML-Antworten.
-- **Fotos:** Es wird ein Manifest für die Bilddateien bereitgestellt. Empfohlen sind JPEGs mit 320 × 200 Pixeln und möglichst höchstens 100 KB pro Bild.
+- **Fotos:** Manifestformat ist JSON (`manifest.json`) mit Pfad, ISO-Datum und Titel pro Bild. Die erzeugten baseline-JPEGs sind 256 × 137 Pixel und auf 24 KiB begrenzt; Ortsnamen werden aus EXIF-GPS per Nominatim/OpenStreetMap abgeleitet.
 - **Aktualisierung:** alle dynamischen Inhalte werden viermal täglich aktualisiert.
 - **Sprache und Zeitzone:** ausschließlich Deutsch; Zeitzone `Europe/Amsterdam`.
 - **WLAN:** Heimnetz-Zugangsdaten werden über das lokale Setup-Portal in NVS gespeichert und nicht in versionierte Dateien eingecheckt. Der Setup-AP ist standardmäßig ausgeschaltet und wird per Touch aktiviert. Währenddessen ist das WLAN offen; das Portal erfordert keinen Login und verwendet unverschlüsseltes HTTP. Der Betreiber akzeptiert dieses Verhalten für die private Verwendung und aktiviert den Setup-Modus nur kurz in vertrauenswürdiger Umgebung. Flash/NVS-Verschlüsselung ist nicht aktiviert.
@@ -179,9 +179,8 @@ Die Inhalte werden, soweit möglich, regelmäßig aus den angegebenen Webquellen
 
 1. **VVV Texel:** Welche konkrete Veranstaltungs-/Tipps-Seite wird ausgelesen, und welche Kategorien oder Anzeigezeiträume sind gewünscht?
 2. **Gezeiten-Daten:** Liefert die Marine API für die gewählten Texel-Koordinaten brauchbare Hoch-/Niedrigwasserzeiten? Falls nicht, muss eine verlässliche lokale Tide-Quelle gewählt werden. Die Grafik stellt den zeitlichen Modellverlauf dar und darf nicht als amtliche Vorhersage erscheinen.
-3. **Manifest:** Dateiname, URL, Format und Aktualisierung des Foto-Manifests müssen festgelegt werden.
-4. **OTA-Paket:** Manifestformat, Versionsschema, Signatur/Prüfschlüssel und exakter Firmware-Dateipfad auf dem Server müssen festgelegt werden. Flashpartitionen und maximale Firmwaregröße sind auf dem 4-MB-Gerät nachzuweisen.
-5. **Setup-Sicherheit:** Offener Setup-AP und Portal ohne Login sind für die private Nutzung bestätigt; das verbleibende Risiko bei länger aktivem Setup-Modus ist zu beachten.
+3. **OTA-Paket:** Manifestformat, Versionsschema, Signatur/Prüfschlüssel und exakter Firmware-Dateipfad auf dem Server müssen festgelegt werden. Flashpartitionen und maximale Firmwaregröße sind auf dem 4-MB-Gerät nachzuweisen.
+4. **Setup-Sicherheit:** Offener Setup-AP und Portal ohne Login sind für die private Nutzung bestätigt; das verbleibende Risiko bei länger aktivem Setup-Modus ist zu beachten.
 
 ## 10. Vorgeschlagene Umsetzungsreihenfolge
 

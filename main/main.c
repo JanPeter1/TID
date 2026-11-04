@@ -37,6 +37,7 @@ static uint8_t active_subpage[PAGE_COUNT];
 static const uint8_t subpage_counts[PAGE_COUNT] = {1, 3, 2, 3, 0};
 static bool setup_credentials_visible;
 static bool qr_visible;
+static bool photo_request_pending;
 static bool sleep_pending;
 static TickType_t setup_visible_until;
 static TickType_t touch_started_at;
@@ -513,9 +514,12 @@ static void draw_page(const app_data_t *data)
             "HEUTE", "KALENDER", "FOTOS", "WETTER", "INFO"
         };
         char url[DATA_EVENT_URL_LENGTH + 32];
-        char title[32];
+        char title[64];
+        const char *page_name = active_page == PAGE_INFO
+            ? info_pages[active_subpage[PAGE_INFO]].title
+            : page_names[active_page];
         current_page_url(data, url, sizeof(url));
-        snprintf(title, sizeof(title), "QR-CODE: %s", page_names[active_page]);
+        snprintf(title, sizeof(title), "QR-CODE: %s", page_name);
         display_fill_rect(28, 34, 266, 188, COLOR_BACKGROUND);
         display_text(34, 40, title, COLOR_ORANGE, 1);
         draw_qr_code(url);
@@ -571,11 +575,25 @@ static void draw_page(const app_data_t *data)
                      ? "FOTOS VON TEXEL - 1" : "FOTOS VON TEXEL - 2",
                      COLOR_ORANGE, 1);
         display_fill_rect(32, 60, 256, 137, COLOR_PANEL);
-        display_text(46, 78, active_subpage[active_page] == 0
-                     ? "ZUFALLSFOTO 1" : "ZUFALLSFOTO 2", COLOR_WHITE, 1);
-        display_text(46, 97, "NOCH NICHT BEREIT", COLOR_ORANGE, 1);
-        display_text(46, 120, "JPEG 320 X 200 PX", COLOR_MUTED, 1);
-        display_text(46, 142, "MANIFEST URL FESTLEGEN", COLOR_MUTED, 1);
+        if (data->photo_ready && !photo_request_pending) {
+            size_t photo_size = 0;
+            const uint8_t *photo = data_photo_jpeg(&photo_size);
+            esp_err_t err = display_draw_jpeg(32, 60, photo, photo_size);
+            if (err != ESP_OK) {
+                ESP_LOGE("ui", "Could not display photo: %s", esp_err_to_name(err));
+                display_text(46, 112, "FOTO KANN NICHT ANGEZEIGT WERDEN",
+                             COLOR_ORANGE, 1);
+            } else {
+                char caption[DATA_PHOTO_TITLE_LENGTH + DATA_PHOTO_DATE_LENGTH + 4];
+                snprintf(caption, sizeof(caption), "%s - %s",
+                         data->photo_title, data->photo_date);
+                display_text(34, 201, caption, COLOR_MUTED, 1);
+            }
+        } else if (data->photo_error) {
+            display_text(54, 112, "FOTO NICHT VERFUEGBAR", COLOR_ORANGE, 1);
+        } else {
+            display_text(70, 112, "FOTO WIRD GELADEN", COLOR_WHITE, 1);
+        }
         break;
     case PAGE_WEATHER:
         draw_weather(data, active_subpage[active_page]);
@@ -613,6 +631,9 @@ static void app_main_task(void *unused)
         bool touched = display_touch_read(&x, &y);
         TickType_t now = xTaskGetTickCount();
         data_snapshot(&snapshot);
+        if (photo_request_pending && (snapshot.photo_ready || snapshot.photo_error)) {
+            photo_request_pending = false;
+        }
         uint8_t active_subpage_count = page_subpage_count(active_page, &snapshot);
         if (active_subpage[active_page] >= active_subpage_count) {
             active_subpage[active_page] = active_subpage_count - 1;
@@ -704,7 +725,13 @@ static void app_main_task(void *unused)
                             show_setup != previous_setup_visibility ||
                             memcmp(&snapshot, &previous, sizeof(snapshot)) != 0;
         if (page_changed) {
+            bool photo_page_changed = active_page == PAGE_PHOTOS &&
+                (active_page != previous_page ||
+                 active_subpage[PAGE_PHOTOS] != previous_subpage);
+            if (active_page != PAGE_PHOTOS) photo_request_pending = false;
+            if (photo_page_changed) photo_request_pending = true;
             draw_page(&snapshot);
+            if (photo_page_changed) data_request_photo();
             if (snapshot.from_cache) {
                 display_text_bg(176, 225, "CACHE", COLOR_ORANGE, COLOR_PANEL, 1);
             }

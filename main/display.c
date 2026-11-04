@@ -23,6 +23,8 @@
 #define TFT_PIN_BL 21
 #define LVGL_BUFFER_ROWS 20
 #define LVGL_LINE_CAPACITY 256
+#define PHOTO_FS_LETTER 'P'
+#define PHOTO_FS_PATH "P:photo.jpg"
 
 static const char *TAG = "display";
 static spi_device_handle_t tft;
@@ -33,9 +35,75 @@ static int touch_x;
 static int touch_y;
 static bool touch_pressed;
 static size_t line_count;
+static const uint8_t *photo_fs_data;
+static size_t photo_fs_size;
+static size_t photo_fs_position;
+static lv_fs_drv_t photo_fs_driver;
 static lv_point_precise_t line_points[LVGL_LINE_CAPACITY][2];
 DMA_ATTR static uint8_t display_buffer[DISPLAY_WIDTH * LVGL_BUFFER_ROWS * 2]
     __attribute__((aligned(4)));
+
+static bool photo_fs_ready(lv_fs_drv_t *driver)
+{
+    (void)driver;
+    return photo_fs_data && photo_fs_size;
+}
+
+static void *photo_fs_open(lv_fs_drv_t *driver, const char *path, lv_fs_mode_t mode)
+{
+    (void)driver;
+    if ((mode & LV_FS_MODE_RD) == 0 || (mode & LV_FS_MODE_WR) != 0 ||
+        (strcmp(path, "photo.jpg") != 0 && strcmp(path, "/photo.jpg") != 0) ||
+        !photo_fs_ready(NULL)) {
+        return NULL;
+    }
+    photo_fs_position = 0;
+    return &photo_fs_position;
+}
+
+static lv_fs_res_t photo_fs_close(lv_fs_drv_t *driver, void *file)
+{
+    (void)driver;
+    (void)file;
+    return LV_FS_RES_OK;
+}
+
+static lv_fs_res_t photo_fs_read(lv_fs_drv_t *driver, void *file, void *buffer,
+                                 uint32_t bytes_to_read, uint32_t *bytes_read)
+{
+    (void)driver;
+    size_t *position = file;
+    if (!position || !buffer || !bytes_read || *position > photo_fs_size) {
+        return LV_FS_RES_INV_PARAM;
+    }
+    size_t remaining = photo_fs_size - *position;
+    size_t count = bytes_to_read < remaining ? bytes_to_read : remaining;
+    memcpy(buffer, photo_fs_data + *position, count);
+    *position += count;
+    *bytes_read = (uint32_t)count;
+    return LV_FS_RES_OK;
+}
+
+static lv_fs_res_t photo_fs_seek(lv_fs_drv_t *driver, void *file, uint32_t position,
+                                 lv_fs_whence_t whence)
+{
+    (void)driver;
+    size_t *current_position = file;
+    if (!current_position || whence != LV_FS_SEEK_SET || position > photo_fs_size) {
+        return LV_FS_RES_INV_PARAM;
+    }
+    *current_position = position;
+    return LV_FS_RES_OK;
+}
+
+static lv_fs_res_t photo_fs_tell(lv_fs_drv_t *driver, void *file, uint32_t *position)
+{
+    (void)driver;
+    size_t *current_position = file;
+    if (!current_position || !position) return LV_FS_RES_INV_PARAM;
+    *position = (uint32_t)*current_position;
+    return LV_FS_RES_OK;
+}
 
 static lv_color_t color_from_rgb565(uint16_t color)
 {
@@ -186,6 +254,15 @@ esp_err_t display_init(void)
     vTaskDelay(pdMS_TO_TICKS(20));
 
     lv_init();
+    lv_fs_drv_init(&photo_fs_driver);
+    photo_fs_driver.letter = PHOTO_FS_LETTER;
+    photo_fs_driver.ready_cb = photo_fs_ready;
+    photo_fs_driver.open_cb = photo_fs_open;
+    photo_fs_driver.close_cb = photo_fs_close;
+    photo_fs_driver.read_cb = photo_fs_read;
+    photo_fs_driver.seek_cb = photo_fs_seek;
+    photo_fs_driver.tell_cb = photo_fs_tell;
+    lv_fs_drv_register(&photo_fs_driver);
     lv_tick_set_cb(lvgl_tick);
     lv_display = lv_display_create(DISPLAY_WIDTH, DISPLAY_HEIGHT);
     if (!lv_display) return ESP_ERR_NO_MEM;
@@ -381,6 +458,20 @@ esp_err_t display_draw_image(int x, int y, const lv_image_dsc_t *image)
     lv_obj_t *object = lv_image_create(screen);
     if (!object) return ESP_ERR_NO_MEM;
     lv_image_set_src(object, image);
+    lv_obj_set_pos(object, x, y);
+    return ESP_OK;
+}
+
+esp_err_t display_draw_jpeg(int x, int y, const uint8_t *data, size_t size)
+{
+    if (!screen || !data || size < 4 || data[0] != 0xFF || data[1] != 0xD8) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    photo_fs_data = data;
+    photo_fs_size = size;
+    lv_obj_t *object = lv_image_create(screen);
+    if (!object) return ESP_ERR_NO_MEM;
+    lv_image_set_src(object, PHOTO_FS_PATH);
     lv_obj_set_pos(object, x, y);
     return ESP_OK;
 }

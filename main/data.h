@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "esp_err.h"
@@ -13,6 +14,10 @@
 #define DATA_EVENT_PLACE_LENGTH 48
 #define DATA_EVENT_DESCRIPTION_LENGTH 120
 #define DATA_EVENT_URL_LENGTH 128
+#define DATA_PHOTO_TITLE_LENGTH 64
+#define DATA_PHOTO_DATE_LENGTH 11
+#define DATA_PHOTO_PATH_LENGTH 64
+#define DATA_PHOTO_MAX_BYTES (24U * 1024U)
 
 typedef struct {
     char date[11];
@@ -38,6 +43,9 @@ typedef struct {
     bool calendar_valid;
     bool events_valid;
     bool from_cache;
+    bool photo_ready;
+    bool photo_error;
+    uint32_t photo_generation;
     float temperature_c;
     float feels_like_c;
     float wind_kmh;
@@ -47,6 +55,8 @@ typedef struct {
     int weather_code;
     char updated_at[20];
     char next_tide[48];
+    char photo_title[DATA_PHOTO_TITLE_LENGTH];
+    char photo_date[DATA_PHOTO_DATE_LENGTH];
     float tide_height_m;
     float tide_samples[TIDE_SAMPLES];
     weather_day_t days[DATA_DAYS];
@@ -58,3 +68,5 @@ typedef struct {
 esp_err_t data_init(void);
 void data_snapshot(app_data_t *out);
 void data_request_refresh(void);
+void data_request_photo(void);
+const uint8_t *data_photo_jpeg(size_t *size);
