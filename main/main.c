@@ -22,6 +22,7 @@
 #define COLOR_ORANGE 0xFD20
 #define COLOR_GREEN 0x07E0
 #define COLOR_WHITE 0xFFFF
+#define PAGE_ROTATE_INTERVAL_MS 60000
 
 typedef enum {
     PAGE_CURRENT,
@@ -78,13 +79,14 @@ static void draw_icon(int index, int center_x, int center_y, uint16_t color)
         display_line(center_x + 2, center_y + 3, center_x + 5, center_y + 1, color);
         break;
     case PAGE_WEATHER:
-        display_circle(center_x - 4, center_y - 3, 4, color);
-        display_line(center_x - 4, center_y - 10, center_x - 4, center_y - 8, color);
-        display_line(center_x - 11, center_y - 3, center_x - 9, center_y - 3, color);
-        display_line(center_x + 1, center_y - 3, center_x + 3, center_y - 3, color);
-        display_circle(center_x + 3, center_y + 1, 5, color);
-        display_circle(center_x - 3, center_y + 3, 5, color);
-        display_line(center_x - 8, center_y + 7, center_x + 9, center_y + 7, color);
+        display_circle(center_x - 5, center_y - 5, 3, color);
+        display_line(center_x - 5, center_y - 10, center_x - 5, center_y - 9, color);
+        display_line(center_x - 10, center_y - 5, center_x - 9, center_y - 5, color);
+        display_line(center_x - 1, center_y - 9, center_x, center_y - 8, color);
+        display_line(center_x - 9, center_y - 9, center_x - 8, center_y - 8, color);
+        display_circle(center_x - 1, center_y + 4, 3, color);
+        display_circle(center_x + 4, center_y + 3, 4, color);
+        display_line(center_x - 5, center_y + 7, center_x + 9, center_y + 7, color);
         break;
     case PAGE_INFO:
         display_circle(center_x, center_y, 9, color);
@@ -128,9 +130,24 @@ static uint8_t page_subpage_count(page_t page, const app_data_t *data)
 static void draw_subpage_indicator(const app_data_t *data)
 {
     char indicator[12];
-    snprintf(indicator, sizeof(indicator), "%u/%u",
-             active_subpage[active_page] + 1,
-             page_subpage_count(active_page, data));
+    if (active_page == PAGE_PHOTOS) {
+        if (data->photo_count) {
+            if (data->photo_number) {
+                snprintf(indicator, sizeof(indicator), "%u/%u",
+                         (unsigned)data->photo_number,
+                         (unsigned)data->photo_count);
+            } else {
+                snprintf(indicator, sizeof(indicator), "--/%u",
+                         (unsigned)data->photo_count);
+            }
+        } else {
+            snprintf(indicator, sizeof(indicator), "--/--");
+        }
+    } else {
+        snprintf(indicator, sizeof(indicator), "%u/%u",
+                 active_subpage[active_page] + 1,
+                 page_subpage_count(active_page, data));
+    }
     display_text_bg(151, 225, indicator, COLOR_ORANGE, COLOR_PANEL, 1);
 }
 
@@ -287,6 +304,29 @@ static const char *weather_description(int code)
     return "WETTER";
 }
 
+static const char *weekday_abbreviation(const char *date)
+{
+    static const char *weekdays[] = {"So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"};
+    int year;
+    int month;
+    int day;
+    if (!date || sscanf(date, "%4d-%2d-%2d", &year, &month, &day) != 3) {
+        return "--";
+    }
+    struct tm calendar_date = {
+        .tm_year = year - 1900,
+        .tm_mon = month - 1,
+        .tm_mday = day,
+        .tm_hour = 12,
+        .tm_isdst = -1,
+    };
+    if (mktime(&calendar_date) == (time_t)-1 ||
+        calendar_date.tm_wday < 0 || calendar_date.tm_wday > 6) {
+        return "--";
+    }
+    return weekdays[calendar_date.tm_wday];
+}
+
 static void draw_weather_icon(int code, int x, int y, int scale)
 {
     const uint16_t sun = COLOR_ORANGE;
@@ -391,7 +431,7 @@ static void draw_weather(const app_data_t *data, uint8_t subpage)
 
     display_text(34, 40, subpage == 0 ? "JETZT AUF TEXEL" : "VORSCHAU - NÄCHSTE 5 TAGE",
                  COLOR_ORANGE, 1);
-    display_text(220, 40, data->updated_at[11] ? data->updated_at + 11 : "--:--",
+    display_text(252, 40, data->updated_at[11] ? data->updated_at + 11 : "--:--",
                  COLOR_MUTED, 1);
     display_text(34, 54, "OPEN-METEO.COM", COLOR_MUTED, 1);
     if (!data->weather_valid) {
@@ -418,15 +458,24 @@ static void draw_weather(const app_data_t *data, uint8_t subpage)
         int displayed_days = 0;
         for (int i = 1; i < DATA_DAYS; i++) {
             if (!data->days[i].date[0]) continue;
-            draw_weather_icon(data->days[i].weather_code, 47,
-                              83 + displayed_days * 23, 1);
-            snprintf(line, sizeof(line), "%.5s %-12s %.0f/%.0fC %d%%",
-                     data->days[i].date + 5,
-                     weather_description(data->days[i].weather_code),
-                     data->days[i].high_c, data->days[i].low_c,
+            int row_y = 78 + displayed_days * 27;
+            uint16_t color = displayed_days == 0 ? COLOR_ORANGE : COLOR_WHITE;
+            char date[12];
+            char temperature[16];
+            char rain_probability[8];
+            snprintf(date, sizeof(date), "%s %.5s",
+                     weekday_abbreviation(data->days[i].date),
+                     data->days[i].date + 5);
+            snprintf(temperature, sizeof(temperature), "%.0f/%.0fC",
+                     data->days[i].high_c, data->days[i].low_c);
+            snprintf(rain_probability, sizeof(rain_probability), "%d%%",
                      data->days[i].rain_probability);
-            display_text(63, 75 + displayed_days * 23, line,
-                         displayed_days == 0 ? COLOR_ORANGE : COLOR_WHITE, 1);
+            draw_weather_icon(data->days[i].weather_code, 47, row_y + 8, 1);
+            display_text(63, row_y, date, color, 1);
+            display_text(118, row_y,
+                         weather_description(data->days[i].weather_code), color, 1);
+            display_text(206, row_y, temperature, color, 1);
+            display_text(259, row_y, rain_probability, color, 1);
             displayed_days++;
         }
         if (displayed_days == 0) {
@@ -571,9 +620,7 @@ static void draw_page(const app_data_t *data)
                           (size_t)active_subpage[active_page] * 340);
         break;
     case PAGE_PHOTOS:
-        display_text(34, 40, active_subpage[active_page] == 0
-                     ? "FOTOS VON TEXEL - 1" : "FOTOS VON TEXEL - 2",
-                     COLOR_ORANGE, 1);
+        display_text(34, 40, "FOTOS VON TEXEL", COLOR_ORANGE, 1);
         display_fill_rect(32, 60, 256, 137, COLOR_PANEL);
         if (data->photo_ready && !photo_request_pending) {
             size_t photo_size = 0;
@@ -623,6 +670,7 @@ static void app_main_task(void *unused)
     int previous_clock_minute = -1;
     bool previous_clock_valid = false;
     bool ntp_sync_logged = false;
+    TickType_t last_auto_advance = xTaskGetTickCount();
     TickType_t last_stack_report = xTaskGetTickCount();
     while (true) {
         display_process();
@@ -682,6 +730,18 @@ static void app_main_task(void *unused)
             }
         }
         was_touched = touched;
+        if (active_page != previous_page ||
+            active_subpage[active_page] != previous_subpage) {
+            last_auto_advance = now;
+        }
+        if (qr_visible) {
+            last_auto_advance = now;
+        } else if (now - last_auto_advance >=
+                   pdMS_TO_TICKS(PAGE_ROTATE_INTERVAL_MS)) {
+            active_subpage[active_page] =
+                (active_subpage[active_page] + 1) % active_subpage_count;
+            last_auto_advance = now;
+        }
         if (sleep_pending && !touched) {
             esp_err_t err = touch_enable_deep_sleep_wakeup();
             if (err != ESP_OK) {
@@ -728,10 +788,13 @@ static void app_main_task(void *unused)
             bool photo_page_changed = active_page == PAGE_PHOTOS &&
                 (active_page != previous_page ||
                  active_subpage[PAGE_PHOTOS] != previous_subpage);
+            bool leaving_photo_page = previous_page == PAGE_PHOTOS &&
+                                      active_page != PAGE_PHOTOS;
             if (active_page != PAGE_PHOTOS) photo_request_pending = false;
             if (photo_page_changed) photo_request_pending = true;
             draw_page(&snapshot);
             if (photo_page_changed) data_request_photo();
+            if (leaving_photo_page) data_release_photo();
             if (snapshot.from_cache) {
                 display_text_bg(176, 225, "CACHE", COLOR_ORANGE, COLOR_PANEL, 1);
             }

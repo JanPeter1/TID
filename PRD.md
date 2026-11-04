@@ -83,10 +83,10 @@ Die Inhalte werden, soweit möglich, regelmäßig aus den angegebenen Webquellen
 
 ### 5.3 Fotos
 
-- `tools/process_photos.py` verarbeitet Bilder aus `assets/photos/source/` und schreibt 256 × 137 baseline-JPEGs bis 24 KiB sowie `assets/photos/images/manifest.json` mit relativen Pfaden, ISO-Datum und Titel.
+- `tools/process_photos.py` verarbeitet Bilder aus `assets/photos/source/` und schreibt 256 × 137 baseline-JPEGs bis 12 KiB sowie `assets/photos/images/manifest.json` mit relativen Pfaden, ISO-Datum, Titel und exakter Dateigröße.
 - Das Datum stammt aus EXIF `DateTimeOriginal`, ersatzweise aus dem Dateierstellungsdatum. Der Titel wird anhand von EXIF-GPS über Nominatim/OpenStreetMap aufgelöst; ohne GPS beziehungsweise bei einem Lookup-Fehler wird der Dateiname oder die Koordinate verwendet.
 - Fehlende und gegenüber der Quelle neuere Bilder werden neu skaliert; unveränderte Ausgaben bleiben erhalten. Das vollständige Verzeichnis `assets/photos/images/` wird manuell per FTP nach `ftp://familie-riegel-de@ftp.familie-riegel.de/tx94/photos/` hochgeladen. FTP-Zugangsdaten werden nicht in versionierte Dateien eingetragen.
-- Die Firmware lädt Manifest und jeweils ausgewähltes Foto über HTTPS von `https://familie-riegel.de/tx94/photos/`. Beim Öffnen oder Wechseln einer Foto-Unterseite wird ein zufälliger Eintrag ausgewählt. JPEG wird mit LVGL/TJPGD in kleinen Kacheln decodiert, damit kein vollständiger RGB565-Bildpuffer benötigt wird.
+- Die Firmware lädt Manifest und jeweils ausgewähltes Foto über HTTPS von `https://familie-riegel.de/tx94/photos/`. Beim Öffnen oder Wechseln einer Foto-Unterseite wird ein zufälliger Eintrag ausgewählt und nur dessen tatsächliche Bytezahl im Heap reserviert. JPEG wird mit LVGL/TJPGD in kleinen Kacheln decodiert, damit kein vollständiger RGB565-Bildpuffer benötigt wird.
 - Fehlerhafte oder nicht unterstützte Bilder dürfen die übrige Oberfläche nicht blockieren.
 - eventuell hier auch eine einbindung von webcams auf texel (zu finden auf der Webseite des VVV Texel).
 
@@ -166,7 +166,7 @@ Die Inhalte werden, soweit möglich, regelmäßig aus den angegebenen Webquellen
 - **Wetterbetrieb:** ausschließlich privates Projekt; Open-Meteo Free ist damit als Anbieter vorgesehen, sofern die Nutzungsbedingungen unverändert passen. CC-BY-Quellenangabe bleibt erforderlich.
 - **Gezeiten:** Hoch- und Niedrigwasserzeiten sowie möglichst eine einfache Grafik. Modellwerte der Marine API sind als Orientierung zu kennzeichnen; die Eignung und der Bezugsort auf Texel müssen noch anhand der API-Daten validiert werden.
 - **Webseiten:** Kalender ist passwortgeschützt, Infos sind öffentlich. Für beide Seiten gibt es keine API; die HTML-Struktur ist stabil. Der Abruf erfolgt durch gezieltes Parsen der HTML-Antworten.
-- **Fotos:** Manifestformat ist JSON (`manifest.json`) mit Pfad, ISO-Datum und Titel pro Bild. Die erzeugten baseline-JPEGs sind 256 × 137 Pixel und auf 24 KiB begrenzt; Ortsnamen werden aus EXIF-GPS per Nominatim/OpenStreetMap abgeleitet.
+- **Fotos:** Manifestformat ist JSON (`manifest.json`) mit Pfad, ISO-Datum, Titel und Bytezahl pro Bild. Die erzeugten baseline-JPEGs sind 256 × 137 Pixel und auf 12 KiB begrenzt; Ortsnamen werden aus EXIF-GPS per Nominatim/OpenStreetMap abgeleitet.
 - **Aktualisierung:** alle dynamischen Inhalte werden viermal täglich aktualisiert.
 - **Sprache und Zeitzone:** ausschließlich Deutsch; Zeitzone `Europe/Amsterdam`.
 - **WLAN:** Heimnetz-Zugangsdaten werden über das lokale Setup-Portal in NVS gespeichert und nicht in versionierte Dateien eingecheckt. Der Setup-AP ist standardmäßig ausgeschaltet und wird per Touch aktiviert. Währenddessen ist das WLAN offen; das Portal erfordert keinen Login und verwendet unverschlüsseltes HTTP. Der Betreiber akzeptiert dieses Verhalten für die private Verwendung und aktiviert den Setup-Modus nur kurz in vertrauenswürdiger Umgebung. Flash/NVS-Verschlüsselung ist nicht aktiviert.

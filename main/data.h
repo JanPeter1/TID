@@ -17,7 +17,7 @@
 #define DATA_PHOTO_TITLE_LENGTH 64
 #define DATA_PHOTO_DATE_LENGTH 11
 #define DATA_PHOTO_PATH_LENGTH 64
-#define DATA_PHOTO_MAX_BYTES (24U * 1024U)
+#define DATA_PHOTO_MAX_BYTES (12U * 1024U)
 
 typedef struct {
     char date[11];
@@ -45,6 +45,8 @@ typedef struct {
     bool from_cache;
     bool photo_ready;
     bool photo_error;
+    uint16_t photo_count;
+    uint16_t photo_number;
     uint32_t photo_generation;
     float temperature_c;
     float feels_like_c;
@@ -69,4 +71,5 @@ esp_err_t data_init(void);
 void data_snapshot(app_data_t *out);
 void data_request_refresh(void);
 void data_request_photo(void);
+void data_release_photo(void);
 const uint8_t *data_photo_jpeg(size_t *size);

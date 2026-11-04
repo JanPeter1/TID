@@ -111,7 +111,7 @@ static const german_glyph_t german_12_glyphs[] = {
     {0x00E4, 7, 7, 9, 7, 0, 0, german_12_a_diaeresis},
     {0x00F6, 8, 8, 9, 8, 0, 0, german_12_o_diaeresis},
     {0x00FC, 7, 7, 9, 7, 0, 0, german_12_u_diaeresis},
-    {0x00DF, 8, 8, 10, 8, 0, 2, german_12_sharp_s},
+    {0x00DF, 8, 8, 10, 8, 0, 0, german_12_sharp_s},
     {0x00E9, 7, 7, 9, 7, 0, 0, german_12_e_acute},
 };
 
@@ -350,7 +350,7 @@ static const german_glyph_t german_24_glyphs[] = {
     {0x00E4, 13, 13, 17, 13, 0, 0, german_24_a_diaeresis},
     {0x00F6, 14, 14, 17, 14, 0, 0, german_24_o_diaeresis},
     {0x00FC, 15, 15, 17, 15, 0, 0, german_24_u_diaeresis},
-    {0x00DF, 15, 15, 18, 15, 0, 4, german_24_sharp_s},
+    {0x00DF, 15, 15, 18, 15, 0, 0, german_24_sharp_s},
     {0x00E9, 14, 14, 18, 14, 0, 0, german_24_e_acute},
 };
 

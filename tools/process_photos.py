@@ -21,7 +21,7 @@ from PIL import ExifTags, Image, ImageOps
 
 PHOTO_WIDTH = 256
 PHOTO_HEIGHT = 137
-DEFAULT_MAX_BYTES = 24 * 1024
+DEFAULT_MAX_BYTES = 12 * 1024
 SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".heif"}
 
 
@@ -223,23 +223,26 @@ def process(source_root, output_root, max_bytes, user_agent):
         output_path = output_root / name
         previous = old_entries.get(name)
         source_stat = source_path.stat()
-        needs_processing = (
-            not output_path.is_file()
-            or source_stat.st_mtime_ns > output_path.stat().st_mtime_ns
-        )
+        output_stat = output_path.stat() if output_path.is_file() else None
+        source_changed = output_stat is None or source_stat.st_mtime_ns > output_stat.st_mtime_ns
+        needs_processing = source_changed or output_stat.st_size > max_bytes
 
         if needs_processing:
             encoded = encode_photo(source_path, max_bytes)
             output_path.write_bytes(encoded)
             os.utime(output_path, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
-            metadata = image_metadata(source_path, user_agent, geocode_cache, last_request)
+            if source_changed or not previous or not previous.get("date") or not previous.get("title"):
+                metadata = image_metadata(source_path, user_agent, geocode_cache, last_request)
+            else:
+                metadata = {"date": previous["date"], "title": previous["title"]}
             processed += 1
         elif previous and previous.get("date") and previous.get("title"):
             metadata = {"date": previous["date"], "title": previous["title"]}
         else:
             metadata = image_metadata(source_path, user_agent, geocode_cache, last_request)
 
-        records.append({"path": name, "date": metadata["date"], "title": metadata["title"]})
+        records.append({"path": name, "date": metadata["date"], "title": metadata["title"],
+                "size": output_path.stat().st_size})
         write_if_changed(manifest_path, manifest_json(records))
         print(f"[{len(records)}/{len(sources)}] {name}", flush=True)
 

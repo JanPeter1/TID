@@ -21,7 +21,8 @@
 #include "freertos/task.h"
 
 #define RESPONSE_LIMIT 16384
-#define EVENT_RESPONSE_LIMIT 32768
+#define EVENT_RESPONSE_LIMIT (12U * 1024U)
+#define PHOTO_MANIFEST_LIMIT 8192
 #define REFRESH_INTERVAL_MS (6U * 60U * 60U * 1000U)
 #define PHOTO_MANIFEST_URL "https://familie-riegel.de/tx94/photos/manifest.json"
 #define PHOTO_BASE_URL "https://familie-riegel.de/tx94/photos/"
@@ -36,7 +37,11 @@ static SemaphoreHandle_t data_lock;
 static EventGroupHandle_t refresh_events;
 static uint8_t *photo_jpeg_buffer;
 static size_t photo_jpeg_size;
+static size_t photo_jpeg_capacity;
 static uint32_t photo_request_serial;
+static bool photo_jpeg_in_use;
+static bool photo_release_pending;
+static bool photo_requested;
 static char last_photo_path[DATA_PHOTO_PATH_LENGTH];
 #define REFRESH_BIT BIT0
 
@@ -112,18 +117,47 @@ static bool http_get(const char *url, const char *username, const char *password
     return success;
 }
 
-static bool http_get_photo_file(const char *url, size_t *written)
+static void finish_photo_buffer_use(void)
 {
-    if (!photo_jpeg_buffer) {
-        photo_jpeg_buffer = malloc(DATA_PHOTO_MAX_BYTES + 1U);
-        if (!photo_jpeg_buffer) {
-            ESP_LOGE(TAG, "Could not allocate photo buffer");
+    xSemaphoreTake(data_lock, portMAX_DELAY);
+    photo_jpeg_in_use = false;
+    if (photo_release_pending) {
+        free(photo_jpeg_buffer);
+        photo_jpeg_buffer = NULL;
+        photo_jpeg_capacity = 0;
+        photo_jpeg_size = 0;
+        photo_release_pending = false;
+    }
+    xSemaphoreGive(data_lock);
+}
+
+static bool http_get_photo_file(const char *url, uint32_t expected_size,
+                                uint32_t request_serial, size_t *written)
+{
+    if (expected_size < 4 || expected_size > DATA_PHOTO_MAX_BYTES) return false;
+    xSemaphoreTake(data_lock, portMAX_DELAY);
+    if (request_serial != photo_request_serial) {
+        xSemaphoreGive(data_lock);
+        return false;
+    }
+    photo_jpeg_in_use = true;
+    xSemaphoreGive(data_lock);
+
+    size_t required_capacity = (size_t)expected_size + 1;
+    if (photo_jpeg_capacity != required_capacity) {
+        uint8_t *resized = realloc(photo_jpeg_buffer, required_capacity);
+        if (!resized) {
+            ESP_LOGE(TAG, "Could not allocate %u-byte photo buffer",
+                     (unsigned)required_capacity);
+            finish_photo_buffer_use();
             return false;
         }
+        photo_jpeg_buffer = resized;
+        photo_jpeg_capacity = required_capacity;
     }
     response_buffer_t response = {
         .data = (char *)photo_jpeg_buffer,
-        .capacity = DATA_PHOTO_MAX_BYTES + 1U,
+        .capacity = required_capacity,
     };
     photo_jpeg_buffer[0] = 0;
     esp_http_client_config_t config = {
@@ -137,11 +171,14 @@ static bool http_get_photo_file(const char *url, size_t *written)
         .buffer_size_tx = 1024,
     };
     esp_http_client_handle_t client = esp_http_client_init(&config);
-    if (!client) return false;
+    if (!client) {
+        finish_photo_buffer_use();
+        return false;
+    }
     esp_err_t err = esp_http_client_perform(client);
     int status = esp_http_client_get_status_code(client);
     bool success = err == ESP_OK && status >= 200 && status < 300 &&
-                   !response.overflow && response.length >= 4 &&
+                   !response.overflow && response.length == expected_size &&
                    photo_jpeg_buffer[0] == 0xFF && photo_jpeg_buffer[1] == 0xD8;
     if (!success) {
         ESP_LOGW(TAG, "Photo download failed: %s, HTTP %d, bytes %u, overflow %d",
@@ -149,8 +186,12 @@ static bool http_get_photo_file(const char *url, size_t *written)
                  response.overflow);
     }
     esp_http_client_cleanup(client);
-    if (!success) return false;
+    if (!success) {
+        finish_photo_buffer_use();
+        return false;
+    }
     *written = response.length;
+    finish_photo_buffer_use();
     return true;
 }
 
@@ -169,8 +210,8 @@ static bool http_post_json(const char *url, const char *body,
         .timeout_ms = 15000,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .keep_alive_enable = true,
-        .buffer_size = 2048,
-        .buffer_size_tx = 2048,
+        .buffer_size = 1024,
+        .buffer_size_tx = 1024,
     };
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (!client) return false;
@@ -221,16 +262,22 @@ static const char *json_string(cJSON *object, const char *key)
 }
 
 static bool photo_entry_fields(cJSON *entry, const char **path,
-                               const char **date, const char **title)
+                               const char **date, const char **title,
+                               uint32_t *photo_size)
 {
     *path = json_string(entry, "path");
     *date = json_string(entry, "date");
     *title = json_string(entry, "title");
+    cJSON *size = object_item(entry, "size");
     if (!*path || !*date || !*title || !(*title)[0] ||
         strlen(*path) >= DATA_PHOTO_PATH_LENGTH || strlen(*date) != 10 ||
-        (*date)[4] != '-' || (*date)[7] != '-' || strstr(*path, "..")) {
+        (*date)[4] != '-' || (*date)[7] != '-' || strstr(*path, "..") ||
+        !cJSON_IsNumber(size) || size->valuedouble < 4 ||
+        size->valuedouble > DATA_PHOTO_MAX_BYTES ||
+        size->valuedouble != (double)size->valueint) {
         return false;
     }
+    *photo_size = (uint32_t)size->valueint;
     size_t path_length = strlen(*path);
     if (path_length < 5 || strcmp(*path + path_length - 4, ".jpg") != 0 ||
         (*path)[0] == '.') return false;
@@ -496,7 +543,7 @@ static void fetch_events(void)
     }
     cJSON_AddStringToObject(request, "operationName", "ActivitySearch");
     cJSON_AddStringToObject(request, "query", query);
-    cJSON_AddNumberToObject(variables, "limit", 40);
+    cJSON_AddNumberToObject(variables, "limit", DATA_EVENT_COUNT);
     cJSON_AddStringToObject(variables, "order", "RANDOM");
     cJSON_AddStringToObject(params, "startDate", today);
     cJSON_AddStringToObject(params, "endDate", tomorrow);
@@ -743,13 +790,14 @@ static void mark_photo_error(uint32_t request_serial)
 
 static void fetch_random_photo(uint32_t request_serial)
 {
-    char *manifest = calloc(1, RESPONSE_LIMIT);
+    char *manifest = calloc(1, PHOTO_MANIFEST_LIMIT);
     if (!manifest) {
         ESP_LOGE(TAG, "Could not allocate photo manifest buffer");
         mark_photo_error(request_serial);
         return;
     }
-    if (!http_get(PHOTO_MANIFEST_URL, NULL, NULL, manifest, RESPONSE_LIMIT)) {
+    if (!http_get(PHOTO_MANIFEST_URL, NULL, NULL, manifest,
+                  PHOTO_MANIFEST_LIMIT)) {
         free(manifest);
         mark_photo_error(request_serial);
         return;
@@ -771,7 +819,10 @@ static void fetch_random_photo(uint32_t request_serial)
         const char *path;
         const char *date;
         const char *title;
-        if (photo_entry_fields(entry, &path, &date, &title)) valid_count++;
+        uint32_t photo_size;
+        if (photo_entry_fields(entry, &path, &date, &title, &photo_size)) {
+            valid_count++;
+        }
     }
     if (!valid_count) {
         ESP_LOGW(TAG, "Photo manifest contains no usable images");
@@ -784,28 +835,40 @@ static void fetch_random_photo(uint32_t request_serial)
     char selected_path[DATA_PHOTO_PATH_LENGTH] = {0};
     char selected_date[DATA_PHOTO_DATE_LENGTH] = {0};
     char selected_title[DATA_PHOTO_TITLE_LENGTH] = {0};
+    uint32_t selected_size = 0;
     for (size_t attempt = 0; attempt < 2; attempt++) {
         size_t valid_index = 0;
         cJSON_ArrayForEach(entry, images) {
             const char *path;
             const char *date;
             const char *title;
-            if (!photo_entry_fields(entry, &path, &date, &title)) continue;
+            uint32_t photo_size;
+            if (!photo_entry_fields(entry, &path, &date, &title, &photo_size)) continue;
             if (valid_index++ != selected_index) continue;
             snprintf(selected_path, sizeof(selected_path), "%s", path);
             snprintf(selected_date, sizeof(selected_date), "%s", date);
             snprintf(selected_title, sizeof(selected_title), "%s", title);
+            selected_size = photo_size;
             break;
         }
         if (valid_count == 1 || strcmp(selected_path, last_photo_path) != 0) break;
         selected_index = (selected_index + 1) % valid_count;
     }
+    xSemaphoreTake(data_lock, portMAX_DELAY);
+    if (request_serial == photo_request_serial) {
+        current_data.photo_count = valid_count > UINT16_MAX
+            ? UINT16_MAX : (uint16_t)valid_count;
+        current_data.photo_number = selected_index >= UINT16_MAX
+            ? UINT16_MAX : (uint16_t)(selected_index + 1);
+        current_data.photo_generation++;
+    }
+    xSemaphoreGive(data_lock);
     cJSON_Delete(root);
 
     char url[sizeof(PHOTO_BASE_URL) + DATA_PHOTO_PATH_LENGTH];
     snprintf(url, sizeof(url), "%s%s", PHOTO_BASE_URL, selected_path);
     size_t downloaded_size = 0;
-    if (!http_get_photo_file(url, &downloaded_size)) {
+    if (!http_get_photo_file(url, selected_size, request_serial, &downloaded_size)) {
         mark_photo_error(request_serial);
         return;
     }
@@ -845,6 +908,8 @@ static void fetch_all(void)
 
     if (http_get(weather_url, NULL, NULL, response, RESPONSE_LIMIT)) parse_weather(response);
     if (http_get(marine_url, NULL, NULL, response, RESPONSE_LIMIT)) parse_tides(response);
+    free(response);
+    response = NULL;
     fetch_events();
 
     device_config_t config;
@@ -939,11 +1004,13 @@ static void refresh_task(void *unused)
         }
         if (photo_pending) {
             uint32_t request_serial;
+            bool requested;
             xSemaphoreTake(data_lock, portMAX_DELAY);
             request_serial = photo_request_serial;
+            requested = photo_requested;
             xSemaphoreGive(data_lock);
             photo_pending = false;
-            fetch_random_photo(request_serial);
+            if (requested) fetch_random_photo(request_serial);
         }
         ESP_LOGI(TAG, "Refresh task minimum remaining stack: %u bytes",
                  (unsigned)uxTaskGetStackHighWaterMark(NULL));
@@ -994,13 +1061,37 @@ void data_request_photo(void)
     if (!data_lock || !refresh_events) return;
     xSemaphoreTake(data_lock, portMAX_DELAY);
     photo_request_serial++;
+    photo_requested = true;
     current_data.photo_ready = false;
     current_data.photo_error = false;
+    current_data.photo_number = 0;
     current_data.photo_generation++;
     current_data.photo_title[0] = '\0';
     current_data.photo_date[0] = '\0';
     xSemaphoreGive(data_lock);
     xEventGroupSetBits(refresh_events, PHOTO_BIT);
+}
+
+void data_release_photo(void)
+{
+    if (!data_lock) return;
+    xSemaphoreTake(data_lock, portMAX_DELAY);
+    photo_request_serial++;
+    photo_requested = false;
+    current_data.photo_ready = false;
+    current_data.photo_error = false;
+    current_data.photo_generation++;
+    current_data.photo_title[0] = '\0';
+    current_data.photo_date[0] = '\0';
+    if (photo_jpeg_in_use) {
+        photo_release_pending = true;
+    } else {
+        free(photo_jpeg_buffer);
+        photo_jpeg_buffer = NULL;
+        photo_jpeg_capacity = 0;
+        photo_jpeg_size = 0;
+    }
+    xSemaphoreGive(data_lock);
 }
 
 const uint8_t *data_photo_jpeg(size_t *size)
