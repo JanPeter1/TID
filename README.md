@@ -8,7 +8,8 @@ ESP-IDF firmware for the ESP32-2432S028 CYD (320 x 240 ILI9341 display and XPT20
 - Montserrat is used for crisp 12 px and 24 px text. Anti-aliased Noto Sans glyphs add German `äöüÄÖÜßé`; the font subset's SIL Open Font License is in `assets/fonts/OFL.txt`.
 - Open-Meteo weather and marine requests, cached content, and periodic refresh every six hours. Fetching starts only after the station has obtained an IP address; a pending initial refresh waits for DHCP instead of attempting DNS while associating. The weather section has pages for current conditions, the next five days, and modeled high/low water with a 12-hour trend.
 - Weather conditions and daily forecast rows include small WMO-code icons rendered as LVGL objects.
-- VVV events are fetched from the page's public GraphQL endpoint; up to 12 today/tomorrow timeslots are cached and shown one per subpage. The compact query requests titles, places, detail slugs, and times only.
+- At startup, a full-screen welcome splash uses `IMG_20261102_081843`; it can be dismissed by touch and otherwise ends after 60 seconds. Once NTP time is available, a current calendar booking adds the group's welcome message.
+- VVV events are fetched from the page's public GraphQL endpoint; up to 16 today/tomorrow timeslots are cached, sorted by start time, and shown one per subpage. The compact query requests titles, places, detail slugs, and times only.
 - Photo processing generates 256 x 137 baseline JPEGs with a 12 KB limit and a JSON manifest containing each file's byte size. The firmware allocates only the selected JPEG's actual size, downloads a random entry when a photo subpage is opened, and decodes it through LVGL's low-memory TJPGD decoder.
 - The status bar shows Wi-Fi connection quality through colored signal bars, without a numeric RSSI value. The Wi-Fi icon sits left of the icon-only setup (gear), QR, and deep-sleep controls. LVGL's QR widget opens the source URL for the selected subpage; touch on the XPT2046 wakes the device from deep sleep.
 - NVS-backed Wi-Fi/calendar configuration through a local setup portal; the larger content cache uses its own flash NVS partition.
@@ -67,6 +68,6 @@ HTTPS data requests use the ESP-IDF certificate bundle. Do not commit Wi-Fi or c
 - `main/config.c` / `main/config.h`: Wi-Fi, NVS settings, setup AP, and SNTP startup.
 - `main/web_config.c` / `main/web_config.h`: local setup portal.
 - `main/data.c` / `main/data.h`: remote requests, parsing, refresh task, and cache.
-- `assets/info/pages.txt` and `tools/generate_info_pages.py`: source format and build-time generator for the offline information pages.
+- `assets/info/pages.txt` and `tools/generate_info_pages.py`: source format and build-time generator for the offline information pages and the 320 x 240 startup splash image.
 - `assets/photos/source/`, `tools/process_photos.py`, and `tools/requirements-photos.txt`: source images, photo processor, and its Python dependencies.
 - `partitions.csv`: 4 MB flash layout with dual OTA application slots and a dedicated content-cache NVS partition. Flash the partition table along with the firmware after changing this layout.

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import io
 import json
 import os
 import sys
@@ -11,6 +12,8 @@ from PIL import Image, ImageOps
 IMAGE_WIDTH = 80
 IMAGE_HEIGHT = 60
 MAX_LINES = 10
+SPLASH_WIDTH = 320
+SPLASH_HEIGHT = 240
 
 
 class InputError(Exception):
@@ -200,7 +203,27 @@ def image_data(image_path):
     return data
 
 
-def generate(pages, asset_root):
+def encode_splash_image(image_path):
+    try:
+        from PIL import Image, ImageOps
+
+        with Image.open(image_path) as source:
+            image = ImageOps.exif_transpose(source).convert("RGB")
+            image = ImageOps.fit(
+                image,
+                (SPLASH_WIDTH, SPLASH_HEIGHT),
+                method=Image.Resampling.LANCZOS,
+            )
+        output = io.BytesIO()
+        image.save(output, format="JPEG", quality=82, optimize=True)
+        return output.getvalue()
+    except ImportError as error:
+        raise InputError("Pillow is required to process the splash image") from error
+    except OSError as error:
+        raise InputError(f"could not process splash image {str(image_path)!r}: {error}") from error
+
+
+def generate(pages, asset_root, splash_image_path):
     image_names = []
     image_bytes = {}
     image_sources = {}
@@ -231,6 +254,17 @@ def generate(pages, asset_root):
         '#include "info_pages.h"',
         "",
     ]
+
+    splash_image = encode_splash_image(splash_image_path)
+    output.append("const uint8_t splash_image_data[] = {")
+    for offset in range(0, len(splash_image), 16):
+        chunk = splash_image[offset:offset + 16]
+        output.append("    " + ", ".join(f"0x{byte:02x}" for byte in chunk) + ",")
+    output.extend([
+        "};",
+        "const size_t splash_image_size = sizeof(splash_image_data);",
+        "",
+    ])
 
     for name in image_names:
         symbol = image_symbols[name]
@@ -284,11 +318,12 @@ def main():
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--assets", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--splash-image", required=True, type=Path)
     args = parser.parse_args()
 
     try:
         pages = parse_pages(args.input)
-        generated = generate(pages, args.assets)
+        generated = generate(pages, args.assets, args.splash_image)
         write_if_changed(args.output, generated.encode("utf-8"))
     except (InputError, OSError) as error:
         print(f"info page generation failed: {error}", file=sys.stderr)

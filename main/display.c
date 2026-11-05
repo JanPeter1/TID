@@ -336,6 +336,24 @@ void display_fill_rect(int x, int y, int width, int height, uint16_t color)
     lv_obj_set_style_radius(object, 0, 0);
 }
 
+void display_fill_rect_opa(int x, int y, int width, int height, uint16_t color,
+                           uint8_t opacity)
+{
+    if (x < 0) { width += x; x = 0; }
+    if (y < 0) { height += y; y = 0; }
+    if (x + width > DISPLAY_WIDTH) width = DISPLAY_WIDTH - x;
+    if (y + height > DISPLAY_HEIGHT) height = DISPLAY_HEIGHT - y;
+    if (width <= 0 || height <= 0) return;
+
+    lv_obj_t *object = new_object();
+    if (!object) return;
+    lv_obj_set_pos(object, x, y);
+    lv_obj_set_size(object, width, height);
+    lv_obj_set_style_bg_color(object, color_from_rgb565(color), 0);
+    lv_obj_set_style_bg_opa(object, opacity, 0);
+    lv_obj_set_style_radius(object, 0, 0);
+}
+
 void display_fill_round_rect(int x, int y, int width, int height, uint16_t color)
 {
     display_fill_round_rect_radius(x, y, width, height, height / 2, color);

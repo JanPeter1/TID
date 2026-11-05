@@ -23,6 +23,7 @@
 #define COLOR_GREEN 0x07E0
 #define COLOR_WHITE 0xFFFF
 #define PAGE_ROTATE_INTERVAL_MS 60000
+#define SPLASH_DURATION_MS 60000
 
 typedef enum {
     PAGE_CURRENT,
@@ -621,6 +622,24 @@ static const calendar_entry_t *calendar_booking_for(
     return NULL;
 }
 
+static const char *current_calendar_booking_name(const app_data_t *data)
+{
+    if (!data->calendar_valid || !config_ntp_synced()) return NULL;
+
+    time_t now = time(NULL);
+    struct tm local_time;
+    if (now < 1704067200 || !localtime_r(&now, &local_time)) return NULL;
+
+    const calendar_entry_t *booking = calendar_booking_for(
+        data, local_time.tm_year + 1900, local_time.tm_mon + 1,
+        local_time.tm_mday);
+    if (!booking || booking->group_id >= DATA_CALENDAR_GROUPS ||
+        !data->calendar_group_names[booking->group_id][0]) {
+        return NULL;
+    }
+    return data->calendar_group_names[booking->group_id];
+}
+
 static uint16_t calendar_group_color(uint8_t group_id)
 {
     static const uint16_t colors[DATA_CALENDAR_GROUPS] = {
@@ -687,13 +706,16 @@ static void draw_calendar(const app_data_t *data)
              month_name, year);
     display_text(30, 40, "BELEGUNGSKALENDER", COLOR_ORANGE, 1);
     display_text(30, 56, month_title, COLOR_WHITE, 1);
-    size_t month_name_characters = 0;
-    for (const unsigned char *character = (const unsigned char *)month_name;
-         *character; character++) {
-        if ((*character & 0xC0) != 0x80) month_name_characters++;
+    if (calendar_month_offset == 0) {
+        size_t title_characters = 0;
+        for (const unsigned char *character =
+                 (const unsigned char *)month_title;
+             *character; character++) {
+            if ((*character & 0xC0) != 0x80) title_characters++;
+        }
+        int title_width = (int)title_characters * 7;
+        display_line(30, 70, 30 + title_width - 1, 70, COLOR_ORANGE);
     }
-    int month_name_width = (int)month_name_characters * 7;
-    display_line(30, 70, 30 + month_name_width - 1, 70, COLOR_ORANGE);
     for (int column = 0; column < 7; column++) {
         display_text_box(grid_left + column * column_pitch, 76,
                          cell_width, 15, weekdays[column],
@@ -831,6 +853,27 @@ static void draw_qr_code(const char *url)
     }
 }
 
+static bool draw_splash_screen(const app_data_t *data)
+{
+    display_clear(COLOR_BACKGROUND);
+    esp_err_t err = display_draw_jpeg(0, 0, splash_image_data,
+                                      splash_image_size);
+    if (err != ESP_OK) {
+        ESP_LOGE("ui", "Could not draw startup splash image: %s",
+                 esp_err_to_name(err));
+        return false;
+    }
+
+    const char *name = current_calendar_booking_name(data);
+    if (name) {
+        char welcome[DATA_CALENDAR_GROUP_NAME_LENGTH + 32];
+        snprintf(welcome, sizeof(welcome), "Willkommen auf Texel, %s", name);
+        display_fill_rect_opa(4, 178, 312, 44, 0x0000, 190);
+        display_text_box(8, 189, 304, 22, welcome, COLOR_WHITE, 1);
+    }
+    return true;
+}
+
 static void draw_info_page(void)
 {
     const info_page_t *page = &info_pages[active_subpage[PAGE_INFO]];
@@ -847,8 +890,11 @@ static void draw_info_page(void)
     }
 }
 
-static void draw_page(const app_data_t *data, uint8_t timer_progress)
+static void draw_page(const app_data_t *data, uint8_t timer_progress,
+                      bool splash_visible)
 {
+    if (splash_visible && draw_splash_screen(data)) return;
+
     display_draw_frame();
     draw_tabs();
     if (qr_visible) {
@@ -951,6 +997,7 @@ static void app_main_task(void *unused)
     uint8_t previous_subpage = UINT8_MAX;
     bool previous_qr_visibility = false;
     bool previous_setup_visibility = false;
+    bool previous_splash_visible = false;
     int previous_timer_second = -1;
     int previous_clock_minute = -1;
     bool previous_clock_valid = false;
@@ -958,13 +1005,17 @@ static void app_main_task(void *unused)
     int previous_calendar_month = calendar_month_offset;
     int previous_calendar_scroll = calendar_scroll_offset;
     TickType_t last_auto_advance = xTaskGetTickCount();
+    TickType_t splash_started = last_auto_advance;
     TickType_t last_stack_report = xTaskGetTickCount();
+    bool splash_dismissed = false;
     while (true) {
         display_process();
         int x = 0;
         int y = 0;
         bool touched = display_touch_read(&x, &y);
         TickType_t now = xTaskGetTickCount();
+        bool splash_visible = !splash_dismissed &&
+            now - splash_started < pdMS_TO_TICKS(SPLASH_DURATION_MS);
         data_snapshot(&snapshot);
         if (photo_request_pending && (snapshot.photo_ready || snapshot.photo_error)) {
             photo_request_pending = false;
@@ -973,72 +1024,81 @@ static void app_main_task(void *unused)
         if (active_subpage[active_page] >= active_subpage_count) {
             active_subpage[active_page] = active_subpage_count - 1;
         }
-        if (touched && !was_touched) {
-            touch_started_at = now;
-            touch_start_x = x;
-            touch_start_y = y;
-            refresh_sent = false;
-        }
-        if (touched && !refresh_sent && now - touch_started_at > pdMS_TO_TICKS(1600)) {
-            if (y < 40) {
+        if (splash_visible && touched && !was_touched) {
+            splash_dismissed = true;
+            splash_visible = false;
+            refresh_sent = true;
+        } else if (!splash_visible) {
+            if (touched && !was_touched) {
+                touch_started_at = now;
+                touch_start_x = x;
+                touch_start_y = y;
+                refresh_sent = false;
+            }
+            if (touched && !refresh_sent &&
+                now - touch_started_at > pdMS_TO_TICKS(1600) && y < 40) {
                 data_request_refresh();
                 refresh_sent = true;
             }
-        }
-        if (touched && !was_touched && y < 38) {
-            int selected = x / 64;
-            if (selected >= 0 && selected < PAGE_COUNT) {
-                active_page = (page_t)selected;
-                active_subpage[active_page] = 0;
-                if (active_page == PAGE_CALENDAR) calendar_scroll_offset = 0;
+            if (touched && !was_touched && y < 38) {
+                int selected = x / 64;
+                if (selected >= 0 && selected < PAGE_COUNT) {
+                    active_page = (page_t)selected;
+                    active_subpage[active_page] = 0;
+                    if (active_page == PAGE_CALENDAR) calendar_scroll_offset = 0;
+                }
             }
-        }
-        if (touched && !was_touched && y >= 40 && y <= 218) {
-            if (active_page == PAGE_CALENDAR && x <= 28) {
-                calendar_month_offset--;
-                calendar_scroll_offset = 0;
-            } else if (active_page == PAGE_CALENDAR && x >= 292) {
-                calendar_month_offset++;
-                calendar_scroll_offset = 0;
-            } else if (active_page != PAGE_CALENDAR && x <= 28) {
-                active_subpage[active_page] =
-                    (active_subpage[active_page] + active_subpage_count - 1) %
-                    active_subpage_count;
-            } else if (active_page != PAGE_CALENDAR && x >= 292) {
-                active_subpage[active_page] =
-                    (active_subpage[active_page] + 1) % active_subpage_count;
+            if (touched && !was_touched && y >= 40 && y <= 218) {
+                if (active_page == PAGE_CALENDAR && x <= 28) {
+                    calendar_month_offset--;
+                    calendar_scroll_offset = 0;
+                } else if (active_page == PAGE_CALENDAR && x >= 292) {
+                    calendar_month_offset++;
+                    calendar_scroll_offset = 0;
+                } else if (active_page != PAGE_CALENDAR && x <= 28) {
+                    active_subpage[active_page] =
+                        (active_subpage[active_page] + active_subpage_count - 1) %
+                        active_subpage_count;
+                } else if (active_page != PAGE_CALENDAR && x >= 292) {
+                    active_subpage[active_page] =
+                        (active_subpage[active_page] + 1) % active_subpage_count;
+                }
             }
-        }
-        if (!touched && was_touched && active_page == PAGE_CALENDAR &&
-            touch_start_x > 28 && touch_start_x < 292 &&
-            touch_start_y >= 86 && touch_start_y <= 218) {
-            int vertical_drag = touch_start_y - y;
-            if (abs(vertical_drag) >= 12) {
-                calendar_scroll_offset += vertical_drag;
-                int scroll_limit = calendar_scroll_limit(&snapshot);
-                if (calendar_scroll_offset < 0) calendar_scroll_offset = 0;
-                if (calendar_scroll_offset > scroll_limit) {
-                    calendar_scroll_offset = scroll_limit;
+            if (!touched && was_touched && active_page == PAGE_CALENDAR &&
+                touch_start_x > 28 && touch_start_x < 292 &&
+                touch_start_y >= 86 && touch_start_y <= 218) {
+                int vertical_drag = touch_start_y - y;
+                if (abs(vertical_drag) >= 12) {
+                    calendar_scroll_offset += vertical_drag;
+                    int scroll_limit = calendar_scroll_limit(&snapshot);
+                    if (calendar_scroll_offset < 0) calendar_scroll_offset = 0;
+                    if (calendar_scroll_offset > scroll_limit) {
+                        calendar_scroll_offset = scroll_limit;
+                    }
+                }
+            }
+            if (touched && !was_touched && y >= 224 && x >= 226 && x < 258) {
+                qr_visible = !qr_visible;
+            }
+            if (touched && !was_touched && y >= 224 && x >= 258 && x < 290) {
+                sleep_pending = true;
+                ESP_LOGI("ui", "Entering deep sleep after touch release");
+            }
+            if (touched && !was_touched && y >= 224 && x >= 290) {
+                esp_err_t err = config_start_setup_ap();
+                if (err == ESP_OK) {
+                    setup_credentials_visible = true;
+                    setup_visible_until = now + pdMS_TO_TICKS(30000);
+                } else {
+                    ESP_LOGE("ui", "Could not start setup AP: %s",
+                             esp_err_to_name(err));
                 }
             }
         }
-        if (touched && !was_touched && y >= 224 && x >= 226 && x < 258) {
-            qr_visible = !qr_visible;
-        }
-        if (touched && !was_touched && y >= 224 && x >= 258 && x < 290) {
-            sleep_pending = true;
-            ESP_LOGI("ui", "Entering deep sleep after touch release");
-        }
-        if (touched && !was_touched && y >= 224 && x >= 290) {
-            esp_err_t err = config_start_setup_ap();
-            if (err == ESP_OK) {
-                setup_credentials_visible = true;
-                setup_visible_until = now + pdMS_TO_TICKS(30000);
-            } else {
-                ESP_LOGE("ui", "Could not start setup AP: %s", esp_err_to_name(err));
-            }
-        }
         was_touched = touched;
+        if (!splash_visible && previous_splash_visible) {
+            last_auto_advance = now;
+        }
         if (active_page != previous_page ||
             active_subpage[active_page] != previous_subpage ||
             (active_page == PAGE_CALENDAR &&
@@ -1099,6 +1159,7 @@ static void app_main_task(void *unused)
                              clock_minute != previous_clock_minute;
         bool page_changed = active_page != previous_page ||
                             active_subpage[active_page] != previous_subpage ||
+                            splash_visible != previous_splash_visible ||
                             calendar_month_offset != previous_calendar_month ||
                             calendar_scroll_offset != previous_calendar_scroll ||
                             qr_visible != previous_qr_visibility ||
@@ -1112,7 +1173,7 @@ static void app_main_task(void *unused)
                                       active_page != PAGE_PHOTOS;
             if (active_page != PAGE_PHOTOS) photo_request_pending = false;
             if (photo_page_changed) photo_request_pending = true;
-            draw_page(&snapshot, timer_progress);
+            draw_page(&snapshot, timer_progress, splash_visible);
             if (photo_page_changed) data_request_photo();
             if (leaving_photo_page) data_release_photo();
             if (snapshot.from_cache) {
@@ -1125,11 +1186,13 @@ static void app_main_task(void *unused)
             previous_calendar_scroll = calendar_scroll_offset;
             previous_qr_visibility = qr_visible;
             previous_setup_visibility = show_setup;
+            previous_splash_visible = splash_visible;
         } else if (clock_changed) {
-            draw_page(&snapshot, timer_progress);
+            draw_page(&snapshot, timer_progress, splash_visible);
             if (snapshot.from_cache) {
                 display_text_bg(146, 225, "CACHE", COLOR_ORANGE, COLOR_PANEL, 1);
             }
+            previous_splash_visible = splash_visible;
         } else if (previous_timer_second != timer_progress) {
             display_set_page_timer(timer_progress);
         }

@@ -16,3 +16,5 @@ typedef struct {
 
 extern const info_page_t info_pages[];
 extern const size_t info_page_count;
+extern const uint8_t splash_image_data[];
+extern const size_t splash_image_size;

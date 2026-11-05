@@ -22,7 +22,7 @@
 #include "freertos/task.h"
 
 #define RESPONSE_LIMIT 16384
-#define EVENT_RESPONSE_LIMIT (12U * 1024U)
+#define EVENT_RESPONSE_LIMIT (16U * 1024U)
 #define PHOTO_MANIFEST_LIMIT 8192
 #define REFRESH_INTERVAL_MS (6U * 60U * 60U * 1000U)
 #define PHOTO_MANIFEST_URL "https://familie-riegel.de/tx94/photos/manifest.json"
@@ -506,7 +506,12 @@ static bool parse_event_response(const char *json, const char *today, const char
         return false;
     }
 
-    texel_event_t events[DATA_EVENT_COUNT] = {0};
+    texel_event_t *events = calloc(DATA_EVENT_COUNT, sizeof(*events));
+    if (!events) {
+        ESP_LOGE(TAG, "Could not allocate VVV event array");
+        cJSON_Delete(root);
+        return false;
+    }
     uint8_t event_count = 0;
     for (cJSON *hit = hits->child; hit && event_count < DATA_EVENT_COUNT; hit = hit->next) {
         const char *title = json_string(hit, "name");
@@ -563,11 +568,13 @@ static bool parse_event_response(const char *json, const char *today, const char
     }
 
     xSemaphoreTake(data_lock, portMAX_DELAY);
-    memcpy(current_data.events, events, sizeof(events));
+    memset(current_data.events, 0, sizeof(current_data.events));
+    memcpy(current_data.events, events, event_count * sizeof(*events));
     current_data.event_count = event_count;
     current_data.events_valid = true;
     current_data.from_cache = false;
     xSemaphoreGive(data_lock);
+    free(events);
     cJSON_Delete(root);
     ESP_LOGI(TAG, "Parsed %u VVV events for today and tomorrow", event_count);
     return true;

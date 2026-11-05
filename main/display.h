@@ -15,6 +15,8 @@ void display_process(void);
 bool display_touch_read(int *x, int *y);
 void display_clear(uint16_t color);
 void display_fill_rect(int x, int y, int width, int height, uint16_t color);
+void display_fill_rect_opa(int x, int y, int width, int height, uint16_t color,
+                           uint8_t opacity);
 void display_fill_round_rect(int x, int y, int width, int height, uint16_t color);
 void display_fill_round_rect_radius(int x, int y, int width, int height,
                                     int radius, uint16_t color);

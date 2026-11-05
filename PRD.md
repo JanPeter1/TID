@@ -68,9 +68,10 @@ Die Inhalte werden, soweit möglich, regelmäßig aus den angegebenen Webquellen
 
 ### 5.1 Aktuell
 
+- Beim Start wird für höchstens 60 Sekunden ein bildschirmfüllender Begrüßungsbildschirm mit `IMG_20261102_081843` gezeigt; eine Touch-Berührung kann ihn vorzeitig schließen. Wenn nach der NTP-Synchronisierung für den aktuellen Tag eine Belegung vorliegt, erscheint „Willkommen auf Texel, <Name>“ in einer teilweise transparenten Textbox.
 - Zeigt aktuelle Veranstaltungen und Termine auf Texel, mindestens für heute und morgen.
 - Quelle: [Veranstaltungsübersicht des VVV Texel](https://www.texel.net/de/veranstaltungsuebersicht/).
-- Veranstaltungen für das lokale heutige und morgige Datum werden dynamisch über die öffentliche GraphQL-Schnittstelle der VVV-Seite abgerufen. Jeder Treffer erhält eine eigene Unterseite mit Titel, Datum/Uhrzeit und Ort sowie einem QR-Link zur Detailseite; maximal 12 passende Termine werden gespeichert.
+- Veranstaltungen für das lokale heutige und morgige Datum werden dynamisch über die öffentliche GraphQL-Schnittstelle der VVV-Seite abgerufen. Jeder Treffer erhält eine eigene Unterseite mit Titel, Datum/Uhrzeit und Ort sowie einem QR-Link zur Detailseite; maximal 16 passende Termine werden gespeichert und chronologisch sortiert.
 - Zeigt außerdem sehenswerte Orte und Tipps; die Referenzoberfläche sieht Filter/Kategorien wie „Alle“, „Orte & Sights“ und „Kinder & Familie“ sowie eine Karten-/Karussellansicht vor.
 - Jeder Eintrag soll, soweit von der Quelle geliefert, Titel, Datum/Uhrzeit, Ort und eine kurze Beschreibung enthalten.
 - Wenn Inhalte nicht abrufbar sind, werden gespeicherte letzte Inhalte mit ihrem Aktualisierungszeitpunkt gezeigt. Sind keine gespeicherten Inhalte vorhanden, erscheint eine verständliche Fehlermeldung.
