@@ -5,11 +5,12 @@ set(SPLASH_IMAGE "${CMAKE_CURRENT_SOURCE_DIR}/../assets/photos/source/IMG_202611
 file(GLOB INFO_SOURCE_IMAGES "${INFO_ASSET_DIR}/source/*")
 
 idf_component_register(
-    SRCS "main.c" "display.c" "german_font.c" "touch.c" "data.c" "config.c" "web_config.c"
+    SRCS "touch.c" "main.c" "ui.c" "display.c" "display_hw.c" "german_font.c"
+         "data.c" "config.c" "web_config.c" "memory.c"
     INCLUDE_DIRS "."
     REQUIRES esp_wifi esp_event esp_netif esp_http_server esp_http_client nvs_flash
              app_update esp_partition cjson esp-tls esp_driver_gpio esp_driver_spi
-             esp_timer lwip lvgl
+             esp_driver_i2c esp_lcd esp_timer lwip lvgl esp_lcd_axs15231b
 )
 
 add_custom_target(generate_info_pages

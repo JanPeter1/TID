@@ -14,9 +14,10 @@ Die Inhalte werden, soweit möglich, regelmäßig aus den angegebenen Webquellen
 ## Umsetzungsstand
 
 - **Bisher am Gerät bestätigt:** ESP-IDF-Projekt für ESP32-2432S028, Displayausrichtung, XPT2046-Touch über separaten SPI-Bus, fünf Icon-Bereiche mit Unterseiten und lokaler Setup-Modus.
+- **Zusätzlich vorbereitet, noch nicht am Gerät geprüft:** Guition JC3248W535C mit ESP32-S3, AXS15231B-QSPI-Display (320 × 480 nativ, Querformat durch Rotation), I²C-Touch und PSRAM. Das Board wird über das ESP-IDF-Ziel und die Auswahl „Texel Info Display → Display board“ konfiguriert; Pins und Kapazitäten liegen in separaten Boardprofilen.
 - **LVGL-Umstellung implementiert, Hardwareverhalten noch zu prüfen:** LVGL 9.6 mit partiellem RGB565-Framebuffer, SPI-Flush für das ILI9341 und XPT2046 als Pointer-Eingabe. Die UI verwendet scharfe Montserrat-Schriften mit Noto-Sans-Glyphen für `äöüÄÖÜß`.
 - **Implementiert, Hardwareverhalten noch zu prüfen:** Wetter-/Marineabruf mit den Seiten „Jetzt“, Fünf-Tage-Vorschau und Gezeitenverlauf, Cache, NTP-Synchronisierung nach WLAN-Verbindung und lokales Setup-Portal ohne Login.
-- **Implementiert, Hardwareverhalten noch zu prüfen:** VVV-GraphQL-Abruf, Filterung auf heute/morgen und eine Unterseite je Event (maximal 12 gespeicherte Events); Wetteransichten mit gezeichneten Wetter-Icons.
+- **Implementiert, Hardwareverhalten noch zu prüfen:** VVV-GraphQL-Abruf, Filterung auf heute/morgen und eine Unterseite je Event (bis zu 16 CYD- beziehungsweise 32 JC3248W535C-Events); Wetteransichten mit gezeichneten Wetter-Icons.
 - **Implementiert, Hardwareverhalten noch zu prüfen:** Belegungskalender lädt öffentliche Tagesbelegungen und Gruppennamen über HTTPS und zeigt sie in einer monatlichen, vertikal scrollbaren Ansicht mit Monatsnavigation.
 - **Noch offen:** VVV-Abruf und Cache auf dem Gerät nach Flashen der aktualisierten Partitionstabelle verifizieren, Anzeige verlässlicher Aktualisierungszeitpunkte und OTA-Update-Logik.
 - **Implementiert, Hardwareverhalten noch zu prüfen:** Fotoverarbeitung mit EXIF-Datum/GPS-Ortsauflösung und JSON-Manifest; zufälliger HTTPS-Abruf beim Öffnen einer Foto-Unterseite und JPEG-Anzeige über LVGL/TJPGD.
@@ -46,6 +47,7 @@ Die Inhalte werden, soweit möglich, regelmäßig aus den angegebenen Webquellen
 ## 4. Zielgerät und Bedienkonzept
 
 - Zielplattform: ESP32-2432S028 („CYD“), ESP-IDF 6.1, 320 × 240 Pixel im Querformat, ILI9341 und resistiver XPT2046-Touchcontroller. Ausrichtung und Touchbedienung wurden auf dem Gerät bestätigt.
+- Alternative Zielplattform: Guition JC3248W535C mit ESP32-S3, 320 × 480 Pixel nativ, im Querformat rotiert auf 480 × 320, AXS15231B über QSPI, Touch über I²C (GPIO 4/8/3) und PSRAM. Diese Anbindung ist implementiert, muss aber vor Produktivbetrieb auf der konkreten Hardware geprüft werden.
 - Das TFT verwendet SPI2. Der Touchcontroller verwendet gemäß dem funktionierenden Referenzprojekt einen separaten SPI3-Bus: MOSI GPIO 32, MISO GPIO 39, SCLK GPIO 25, CS GPIO 33, IRQ GPIO 36. Die Display-Hintergrundbeleuchtung liegt auf GPIO 21.
 - Das Layout soll sich am angehängten Referenzbild orientieren: dunkler Hintergrund, kontrastreiche Texte, orange Hervorhebungen, kompakte Navigationsleiste und Karten-/Listenansichten. Die Anzeige wird mit LVGL 9.6 aufgebaut.
 - Hauptbereiche:
@@ -85,10 +87,10 @@ Die Inhalte werden, soweit möglich, regelmäßig aus den angegebenen Webquellen
 
 ### 5.3 Fotos
 
-- `tools/process_photos.py` verarbeitet Bilder aus `assets/photos/source/` und schreibt 256 × 137 baseline-JPEGs bis 12 KiB sowie `assets/photos/images/manifest.json` mit relativen Pfaden, ISO-Datum, Titel und exakter Dateigröße.
+- `tools/process_photos.py` verarbeitet Bilder aus `assets/photos/source/` für beide Profile: 256 × 137 baseline-JPEGs bis 12 KiB für CYD sowie 384 × 205 bis 40 KiB für JC3248W535C. Jedes Profil erhält ein eigenes Manifest; Maße und Limits liegen in `tools/photo_profiles.json`.
 - Das Datum stammt aus EXIF `DateTimeOriginal`, ersatzweise aus dem Dateierstellungsdatum. Der Titel wird anhand von EXIF-GPS über Nominatim/OpenStreetMap aufgelöst; ohne GPS beziehungsweise bei einem Lookup-Fehler wird der Dateiname oder die Koordinate verwendet.
-- Fehlende und gegenüber der Quelle neuere Bilder werden neu skaliert; unveränderte Ausgaben bleiben erhalten. Das vollständige Verzeichnis `assets/photos/images/` wird manuell per FTP nach `ftp://familie-riegel-de@ftp.familie-riegel.de/tx94/photos/` hochgeladen. FTP-Zugangsdaten werden nicht in versionierte Dateien eingetragen.
-- Die Firmware lädt Manifest und jeweils ausgewähltes Foto über HTTPS von `https://familie-riegel.de/tx94/photos/`. Beim Öffnen oder Wechseln einer Foto-Unterseite wird ein zufälliger Eintrag ausgewählt und nur dessen tatsächliche Bytezahl im Heap reserviert. JPEG wird mit LVGL/TJPGD in kleinen Kacheln decodiert, damit kein vollständiger RGB565-Bildpuffer benötigt wird.
+- Fehlende und gegenüber der Quelle neuere Bilder werden neu skaliert; unveränderte Ausgaben bleiben erhalten. `python tools/process_photos.py --upload` lädt beide Profilverzeichnisse samt Manifest per SFTP mit Host-Key-Prüfung hoch. Zugangsdaten bleiben in der nicht versionierten `.env`; unverschlüsseltes FTP wird nicht unterstützt.
+- Die Firmware lädt das Manifest und das ausgewählte Foto über HTTPS aus dem zum Board gehörenden Unterverzeichnis. Beim Öffnen oder Wechseln einer Foto-Unterseite wird ein zufälliger Eintrag gewählt; der Photo-Puffer wird profilabhängig aus internem RAM oder PSRAM reserviert. JPEG wird mit LVGL/TJPGD in kleinen Kacheln decodiert, damit kein vollständiger RGB565-Bildpuffer benötigt wird.
 - Fehlerhafte oder nicht unterstützte Bilder dürfen die übrige Oberfläche nicht blockieren.
 - eventuell hier auch eine einbindung von webcams auf texel (zu finden auf der Webseite des VVV Texel).
 

@@ -1,0 +1,12 @@
+{
+  "cyd": {
+    "width": 256,
+    "height": 137,
+    "max_bytes": 12288
+  },
+  "jc3248w535c": {
+    "width": 384,
+    "height": 205,
+    "max_bytes": 40960
+  }
+}

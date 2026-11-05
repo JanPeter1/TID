@@ -1,0 +1,18 @@
+menu "Texel Info Display"
+
+choice TID_DISPLAY_BOARD
+    prompt "Display board"
+    default TID_BOARD_CYD if IDF_TARGET_ESP32
+    default TID_BOARD_JC3248W535C if IDF_TARGET_ESP32S3
+
+config TID_BOARD_CYD
+    bool "ESP32-2432S028 CYD"
+    depends on IDF_TARGET_ESP32
+
+config TID_BOARD_JC3248W535C
+    bool "Guition JC3248W535C"
+    depends on IDF_TARGET_ESP32S3
+
+endchoice
+
+endmenu

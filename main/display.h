@@ -6,9 +6,10 @@
 
 #include "esp_err.h"
 #include "lvgl.h"
+#include "boards/board_config.h"
 
-#define DISPLAY_WIDTH 320
-#define DISPLAY_HEIGHT 240
+#define DISPLAY_WIDTH UI_BASE_WIDTH
+#define DISPLAY_HEIGHT UI_BASE_HEIGHT
 
 esp_err_t display_init(void);
 void display_process(void);
@@ -29,6 +30,7 @@ esp_err_t display_draw_tide_chart(const int32_t *values, size_t count,
 esp_err_t display_draw_qr_code(int x, int y, int size, const char *data);
 esp_err_t display_draw_image(int x, int y, const lv_image_dsc_t *image);
 esp_err_t display_draw_jpeg(int x, int y, const uint8_t *data, size_t size);
+esp_err_t display_draw_photo_jpeg(int x, int y, const uint8_t *data, size_t size);
 void display_text(int x, int y, const char *text, uint16_t color, uint8_t scale);
 void display_text_box(int x, int y, int width, int height, const char *text,
                       uint16_t color, uint8_t scale);

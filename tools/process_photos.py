@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import errno
 import ftplib
 import hashlib
 import io
@@ -19,9 +20,12 @@ from urllib.request import Request, urlopen
 
 from PIL import ExifTags, Image, ImageOps
 
-PHOTO_WIDTH = 256
-PHOTO_HEIGHT = 137
-DEFAULT_MAX_BYTES = 12 * 1024
+PHOTO_PROFILE_CONFIG = Path(__file__).with_name("photo_profiles.json")
+PHOTO_PROFILES = {
+    name: (profile["width"], profile["height"], profile["max_bytes"])
+    for name, profile in json.loads(
+        PHOTO_PROFILE_CONFIG.read_text(encoding="utf-8")).items()
+}
 SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".heif"}
 
 
@@ -153,12 +157,12 @@ def image_metadata(source_path, user_agent, geocode_cache, last_request):
     return {"date": date, "title": title}
 
 
-def encode_photo(source_path, max_bytes):
+def encode_photo(source_path, width, height, max_bytes):
     with Image.open(source_path) as source:
         image = ImageOps.exif_transpose(source).convert("RGB")
         image = ImageOps.fit(
             image,
-            (PHOTO_WIDTH, PHOTO_HEIGHT),
+            (width, height),
             method=Image.Resampling.LANCZOS,
         )
 
@@ -169,7 +173,7 @@ def encode_photo(source_path, max_bytes):
         if len(encoded) <= max_bytes:
             return encoded
     raise ValueError(
-        f"{source_path.name}: cannot meet the {max_bytes}-byte limit at {PHOTO_WIDTH}x{PHOTO_HEIGHT}"
+        f"{source_path.name}: cannot meet the {max_bytes}-byte limit at {width}x{height}"
     )
 
 
@@ -203,128 +207,233 @@ def manifest_json(records):
                       indent=2) + "\n"
 
 
-def process(source_root, output_root, max_bytes, user_agent):
+def process(source_root, output_root, max_bytes, user_agent, profile_names):
     source_root = source_root.resolve()
     register_heif(source_root)
     output_root.mkdir(parents=True, exist_ok=True)
-    manifest_path = output_root / "manifest.json"
-    old_entries = read_old_manifest(manifest_path)
     geocode_cache = {}
     last_request = [0.0]
-    records = []
-    processed = 0
 
     sources = sorted(
         path for path in source_root.rglob("*")
         if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS
     )
-    for source_path in sources:
-        name = output_name(source_path, source_root)
-        output_path = output_root / name
-        previous = old_entries.get(name)
-        source_stat = source_path.stat()
-        output_stat = output_path.stat() if output_path.is_file() else None
-        source_changed = output_stat is None or source_stat.st_mtime_ns > output_stat.st_mtime_ns
-        needs_processing = source_changed or output_stat.st_size > max_bytes
+    for profile_name in profile_names:
+        width, height, default_max_bytes = PHOTO_PROFILES[profile_name]
+        profile_output = output_root / profile_name
+        profile_output.mkdir(parents=True, exist_ok=True)
+        manifest_path = profile_output / "manifest.json"
+        old_entries = read_old_manifest(manifest_path)
+        if not old_entries:
+            old_entries = read_old_manifest(output_root / "manifest.json")
+        records = []
+        processed = 0
 
-        if needs_processing:
-            encoded = encode_photo(source_path, max_bytes)
-            output_path.write_bytes(encoded)
-            os.utime(output_path, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
-            if source_changed or not previous or not previous.get("date") or not previous.get("title"):
-                metadata = image_metadata(source_path, user_agent, geocode_cache, last_request)
-            else:
+        for source_path in sources:
+            name = output_name(source_path, source_root)
+            output_path = profile_output / name
+            previous = old_entries.get(name)
+            source_stat = source_path.stat()
+            output_stat = output_path.stat() if output_path.is_file() else None
+            source_changed = (output_stat is None or
+                              source_stat.st_mtime_ns > output_stat.st_mtime_ns)
+            target_max_bytes = max_bytes or default_max_bytes
+            needs_processing = (source_changed or
+                                output_stat.st_size > target_max_bytes)
+
+            if needs_processing:
+                encoded = encode_photo(source_path, width, height, target_max_bytes)
+                output_path.write_bytes(encoded)
+                os.utime(output_path, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
+                if (source_changed or not previous or not previous.get("date") or
+                        not previous.get("title")):
+                    metadata = image_metadata(
+                        source_path, user_agent, geocode_cache, last_request)
+                else:
+                    metadata = {"date": previous["date"], "title": previous["title"]}
+                processed += 1
+            elif previous and previous.get("date") and previous.get("title"):
                 metadata = {"date": previous["date"], "title": previous["title"]}
-            processed += 1
-        elif previous and previous.get("date") and previous.get("title"):
-            metadata = {"date": previous["date"], "title": previous["title"]}
-        else:
-            metadata = image_metadata(source_path, user_agent, geocode_cache, last_request)
+            else:
+                metadata = image_metadata(
+                    source_path, user_agent, geocode_cache, last_request)
 
-        records.append({"path": name, "date": metadata["date"], "title": metadata["title"],
-                "size": output_path.stat().st_size})
+            records.append({
+                "path": name,
+                "date": metadata["date"],
+                "title": metadata["title"],
+                "size": output_path.stat().st_size,
+            })
+            write_if_changed(manifest_path, manifest_json(records))
+            print(f"[{profile_name}] [{len(records)}/{len(sources)}] {name}", flush=True)
+
         write_if_changed(manifest_path, manifest_json(records))
-        print(f"[{len(records)}/{len(sources)}] {name}", flush=True)
-
-    write_if_changed(manifest_path, manifest_json(records))
-    print(f"Photos: {len(records)} manifest entries; {processed} images processed")
+        print(f"{profile_name}: {len(records)} manifest entries; "
+              f"{processed} images processed")
 
 
-def upload_images(output_root, env_file):
+def profile_upload_files(output_root, profile_name):
+    profile_dir = output_root / profile_name
+    manifest_path = profile_dir / "manifest.json"
+    if not manifest_path.is_file():
+        raise ValueError(f"Photo manifest not found: {manifest_path}")
+    return [manifest_path] + sorted(
+        path for path in profile_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg"}
+    )
+
+
+def upload_ftp_images(output_root, profile_names, host, port, user, password,
+                      remote_dir):
+    ftp = ftplib.FTP_TLS(context=ssl.create_default_context())
+    try:
+        ftp.connect(host, port, timeout=30)
+        ftp.login(user, password)
+        ftp.prot_p()
+        ftp.set_pasv(True)
+        ftp.cwd(remote_dir)
+        for profile_name in profile_names:
+            try:
+                ftp.cwd(profile_name)
+            except ftplib.error_perm as error:
+                if not str(error).startswith("550"):
+                    raise
+                ftp.mkd(profile_name)
+                ftp.cwd(profile_name)
+
+            files = profile_upload_files(output_root, profile_name)
+            for index, path in enumerate(files, 1):
+                with path.open("rb") as image_file:
+                    ftp.storbinary(f"STOR {path.name}", image_file, blocksize=8192)
+                print(f"[{profile_name}] [{index}/{len(files)}] "
+                      f"Uploaded {path.name}", flush=True)
+            ftp.cwd("..")
+        ftp.quit()
+    except (OSError, EOFError, ftplib.Error, UnicodeError) as error:
+        ftp.close()
+        raise RuntimeError(f"FTPS upload failed: {error}") from error
+
+
+def upload_sftp_images(output_root, profile_names, host, port, user, password,
+                       remote_dir):
+    try:
+        import paramiko
+    except ImportError as error:
+        raise ValueError(
+            "SFTP uploads require paramiko; install tools/requirements-photos.txt"
+        ) from error
+
+    known_hosts = Path.home() / ".ssh" / "known_hosts"
+    if not known_hosts.is_file():
+        raise ValueError(f"SFTP known_hosts file not found: {known_hosts}")
+
+    client = paramiko.SSHClient()
+    client.load_system_host_keys(str(known_hosts))
+    client.set_missing_host_key_policy(paramiko.RejectPolicy())
+    sftp = None
+    try:
+        client.connect(
+            hostname=host,
+            port=port,
+            username=user,
+            password=password,
+            timeout=30,
+            banner_timeout=30,
+            auth_timeout=30,
+            allow_agent=False,
+            look_for_keys=False,
+        )
+        sftp = client.open_sftp()
+        sftp.chdir(remote_dir)
+        for profile_name in profile_names:
+            try:
+                sftp.stat(profile_name)
+            except OSError as error:
+                if error.errno != errno.ENOENT:
+                    raise
+                sftp.mkdir(profile_name)
+            sftp.chdir(profile_name)
+
+            files = profile_upload_files(output_root, profile_name)
+            for index, path in enumerate(files, 1):
+                sftp.put(str(path), path.name, confirm=True)
+                print(f"[{profile_name}] [{index}/{len(files)}] "
+                      f"Uploaded {path.name}", flush=True)
+            sftp.chdir("..")
+    except (OSError, EOFError, paramiko.SSHException) as error:
+        raise RuntimeError(f"SFTP upload failed: {error}") from error
+    finally:
+        if sftp is not None:
+            sftp.close()
+        client.close()
+
+
+def upload_images(output_root, env_file, profile_names):
     try:
         from dotenv import dotenv_values
     except ImportError as error:
-        raise ValueError("FTP uploads require python-dotenv; install tools/requirements-photos.txt") from error
+        raise ValueError("Photo uploads require python-dotenv; install tools/requirements-photos.txt") from error
 
     settings = dotenv_values(env_file)
     host = settings.get("FTP_HOST")
     user = settings.get("FTP_USER")
     password = settings.get("FTP_PASSWORD")
     remote_dir = settings.get("FTP_REMOTE_DIR", "/tx94/photos/")
+    protocol = str(settings.get("FTP_PROTOCOL", "")).strip().lower()
     try:
-        port = int(settings.get("FTP_PORT", "21"))
+        port = int(settings.get("FTP_PORT", "22" if protocol == "sftp" else "21"))
     except (TypeError, ValueError) as error:
         raise ValueError("FTP_PORT in .env must be an integer") from error
     tls_value = str(settings.get("FTP_USE_TLS", "false")).strip().lower()
     if tls_value not in {"true", "false", "1", "0", "yes", "no"}:
         raise ValueError("FTP_USE_TLS in .env must be true or false")
-    use_tls = tls_value in {"true", "1", "yes"}
+    if not protocol:
+        protocol = "ftps" if tls_value in {"true", "1", "yes"} else "ftp"
+    if protocol not in {"sftp", "ftps", "ftp"}:
+        raise ValueError("FTP_PROTOCOL in .env must be sftp or ftps")
+    if protocol == "ftp":
+        raise ValueError("Unencrypted FTP is not supported; configure SFTP or FTPS")
     missing = [key for key, value in (
         ("FTP_HOST", host), ("FTP_USER", user), ("FTP_PASSWORD", password)
     ) if not value]
     if missing:
-        raise ValueError(f"Missing FTP settings in {env_file}: {', '.join(missing)}")
+        raise ValueError(f"Missing upload settings in {env_file}: {', '.join(missing)}")
 
-    manifest_path = output_root / "manifest.json"
-    if not manifest_path.is_file():
-        raise ValueError(f"Photo manifest not found: {manifest_path}")
-    files = [manifest_path] + sorted(
-        path for path in output_root.iterdir()
-        if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg"}
-    )
-    ftp = ftplib.FTP_TLS(context=ssl.create_default_context()) if use_tls else ftplib.FTP()
-    if not use_tls:
-        print("Warning: plain FTP sends credentials and files without encryption.", file=sys.stderr)
-    try:
-        ftp.connect(host, port, timeout=30)
-        ftp.login(user, password)
-        if use_tls:
-            ftp.prot_p()
-        ftp.set_pasv(True)
-        ftp.cwd(remote_dir)
-        for index, path in enumerate(files, 1):
-            with path.open("rb") as image_file:
-                ftp.storbinary(f"STOR {path.name}", image_file, blocksize=8192)
-            print(f"[{index}/{len(files)}] Uploaded {path.name}", flush=True)
-        ftp.quit()
-    except (OSError, EOFError, ftplib.Error) as error:
-        try:
-            ftp.close()
-        except OSError:
-            pass
-        raise RuntimeError(f"FTP upload failed: {error}") from error
+    if protocol == "sftp":
+        upload_sftp_images(
+            output_root, profile_names, host, port, user, password, remote_dir)
+    else:
+        upload_ftp_images(
+            output_root, profile_names, host, port, user, password, remote_dir)
 
 
 def main():
     repo_root = Path(__file__).resolve().parents[1]
-    parser = argparse.ArgumentParser(description="Scale photos and generate their web manifest")
+    parser = argparse.ArgumentParser(
+        description="Generate photo variants and manifests for supported displays")
     parser.add_argument("--source", type=Path, default=repo_root / "assets/photos/source")
     parser.add_argument("--output", type=Path, default=repo_root / "assets/photos/images")
-    parser.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES)
-    parser.add_argument("--upload", action="store_true", help="upload the output folder via FTP")
+    parser.add_argument("--max-bytes", type=int,
+                        help="override each profile's maximum JPEG size")
+    parser.add_argument("--profile", choices=["all", *PHOTO_PROFILES],
+                        default="all", help="generate/upload only one display profile")
+    parser.add_argument("--upload", action="store_true", help="upload the output folder via SFTP or FTPS")
     parser.add_argument("--env-file", type=Path, default=repo_root / ".env",
-                        help="FTP credentials file used with --upload")
+                        help="upload credentials file used with --upload")
     parser.add_argument(
         "--user-agent",
         default="TexelInfoDisplay-photo-processor/1.0 (personal photo metadata processor)",
     )
     args = parser.parse_args()
-    if args.max_bytes <= 0:
+    if args.max_bytes is not None and args.max_bytes <= 0:
         parser.error("--max-bytes must be greater than zero")
+    profile_names = (list(PHOTO_PROFILES) if args.profile == "all"
+                     else [args.profile])
     try:
-        process(args.source, args.output, args.max_bytes, args.user_agent)
+        process(args.source, args.output, args.max_bytes, args.user_agent,
+                profile_names)
         if args.upload:
-            upload_images(args.output.resolve(), args.env_file)
+            upload_images(args.output.resolve(), args.env_file, profile_names)
     except (OSError, ValueError, RuntimeError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 1

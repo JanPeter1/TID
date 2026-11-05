@@ -14,6 +14,7 @@
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_crt_bundle.h"
+#include "memory.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
@@ -21,12 +22,19 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
-#define RESPONSE_LIMIT 16384
-#define EVENT_RESPONSE_LIMIT (16U * 1024U)
-#define PHOTO_MANIFEST_LIMIT 8192
+#define RESPONSE_LIMIT BOARD_HTTP_RESPONSE_LIMIT
+#define EVENT_RESPONSE_LIMIT BOARD_EVENT_RESPONSE_LIMIT
+#define PHOTO_MANIFEST_LIMIT BOARD_PHOTO_MANIFEST_LIMIT
 #define REFRESH_INTERVAL_MS (6U * 60U * 60U * 1000U)
-#define PHOTO_MANIFEST_URL "https://familie-riegel.de/tx94/photos/manifest.json"
-#define PHOTO_BASE_URL "https://familie-riegel.de/tx94/photos/"
+#if CONFIG_TID_BOARD_CYD
+#define PHOTO_PROFILE_PATH "cyd/"
+#elif CONFIG_TID_BOARD_JC3248W535C
+#define PHOTO_PROFILE_PATH "jc3248w535c/"
+#endif
+#define PHOTO_MANIFEST_URL \
+    "https://familie-riegel.de/tx94/photos/" PHOTO_PROFILE_PATH "manifest.json"
+#define PHOTO_BASE_URL \
+    "https://familie-riegel.de/tx94/photos/" PHOTO_PROFILE_PATH
 #define CALENDAR_TERMS_URL \
     "https://familie-riegel.de/tx94/content/plugins/occcal/Texelkalender_termine.txt"
 #define CALENDAR_GROUPS_URL \
@@ -138,7 +146,7 @@ static void finish_photo_buffer_use(void)
     xSemaphoreTake(data_lock, portMAX_DELAY);
     photo_jpeg_in_use = false;
     if (photo_release_pending) {
-        free(photo_jpeg_buffer);
+        memory_free(photo_jpeg_buffer);
         photo_jpeg_buffer = NULL;
         photo_jpeg_capacity = 0;
         photo_jpeg_size = 0;
@@ -161,13 +169,12 @@ static bool http_get_photo_file(const char *url, uint32_t expected_size,
 
     size_t required_capacity = (size_t)expected_size + 1;
     if (photo_jpeg_capacity != required_capacity) {
-        uint8_t *resized = realloc(photo_jpeg_buffer, required_capacity);
+        uint8_t *resized = memory_alloc(required_capacity, MEMORY_ALLOC_LARGE);
         if (!resized) {
-            ESP_LOGE(TAG, "Could not allocate %u-byte photo buffer",
-                     (unsigned)required_capacity);
             finish_photo_buffer_use();
             return false;
         }
+        memory_free(photo_jpeg_buffer);
         photo_jpeg_buffer = resized;
         photo_jpeg_capacity = required_capacity;
     }
@@ -644,12 +651,13 @@ static void fetch_events(void)
         ESP_LOGE(TAG, "Could not serialize VVV query");
         return;
     }
-    char *response = calloc(1, EVENT_RESPONSE_LIMIT);
+    char *response = memory_alloc(EVENT_RESPONSE_LIMIT, MEMORY_ALLOC_LARGE);
     if (!response) {
         ESP_LOGE(TAG, "Could not allocate VVV response buffer");
         free(body);
         return;
     }
+    memset(response, 0, EVENT_RESPONSE_LIMIT);
     bool response_ok = http_post_json("https://texel-gateway.travelbase.nl/graphql",
                                       body, response, EVENT_RESPONSE_LIMIT);
     log_vvv_response(response);
@@ -658,7 +666,7 @@ static void fetch_events(void)
             ESP_LOGW(TAG, "VVV GraphQL response did not contain event data");
         }
     }
-    free(response);
+    memory_free(response);
     free(body);
 }
 
@@ -960,11 +968,12 @@ static bool parse_calendar_groups(
 
 static void fetch_calendar(void)
 {
-    char *response = calloc(1, RESPONSE_LIMIT);
+    char *response = memory_alloc(RESPONSE_LIMIT, MEMORY_ALLOC_LARGE);
     if (!response) {
         ESP_LOGE(TAG, "Could not allocate calendar response buffer");
         return;
     }
+    memset(response, 0, RESPONSE_LIMIT);
 
     calendar_entry_t entries[DATA_CALENDAR_MAX_ENTRIES] = {0};
     uint16_t entry_count = 0;
@@ -973,14 +982,14 @@ static void fetch_calendar(void)
                    parse_calendar_terms(response, entries, &entry_count);
     if (!success) {
         ESP_LOGW(TAG, "Could not parse occupancy calendar terms");
-        free(response);
+        memory_free(response);
         return;
     }
 
     memset(response, 0, RESPONSE_LIMIT);
     success = http_get(CALENDAR_GROUPS_URL, NULL, NULL, response, RESPONSE_LIMIT) &&
               parse_calendar_groups(response, group_names);
-    free(response);
+    memory_free(response);
     if (!success) {
         ESP_LOGW(TAG, "Could not parse occupancy calendar groups");
         return;
@@ -1016,21 +1025,22 @@ static void mark_photo_error(uint32_t request_serial)
 
 static void fetch_random_photo(uint32_t request_serial)
 {
-    char *manifest = calloc(1, PHOTO_MANIFEST_LIMIT);
+    char *manifest = memory_alloc(PHOTO_MANIFEST_LIMIT, MEMORY_ALLOC_LARGE);
     if (!manifest) {
         ESP_LOGE(TAG, "Could not allocate photo manifest buffer");
         mark_photo_error(request_serial);
         return;
     }
+    memset(manifest, 0, PHOTO_MANIFEST_LIMIT);
     if (!http_get(PHOTO_MANIFEST_URL, NULL, NULL, manifest,
                   PHOTO_MANIFEST_LIMIT)) {
-        free(manifest);
+        memory_free(manifest);
         mark_photo_error(request_serial);
         return;
     }
 
     cJSON *root = cJSON_Parse(manifest);
-    free(manifest);
+    memory_free(manifest);
     cJSON *images = object_item(root, "images");
     if (!cJSON_IsArray(images)) {
         ESP_LOGW(TAG, "Photo manifest has no images array");
@@ -1127,11 +1137,12 @@ static void fetch_random_photo(uint32_t request_serial)
 
 static void fetch_all(void)
 {
-    char *response = calloc(1, RESPONSE_LIMIT);
+    char *response = memory_alloc(RESPONSE_LIMIT, MEMORY_ALLOC_LARGE);
     if (!response) {
         ESP_LOGE(TAG, "Could not allocate HTTP response buffer");
         return;
     }
+    memset(response, 0, RESPONSE_LIMIT);
     const char *weather_url =
         "https://api.open-meteo.com/v1/forecast?latitude=53.124279&longitude=4.812830"
         "&current=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,wind_gusts_10m"
@@ -1143,7 +1154,7 @@ static void fetch_all(void)
 
     if (http_get(weather_url, NULL, NULL, response, RESPONSE_LIMIT)) parse_weather(response);
     if (http_get(marine_url, NULL, NULL, response, RESPONSE_LIMIT)) parse_tides(response);
-    free(response);
+    memory_free(response);
     fetch_events();
     fetch_calendar();
     ESP_LOGI(TAG, "Content refresh finished");
@@ -1322,7 +1333,7 @@ void data_release_photo(void)
     if (photo_jpeg_in_use) {
         photo_release_pending = true;
     } else {
-        free(photo_jpeg_buffer);
+        memory_free(photo_jpeg_buffer);
         photo_jpeg_buffer = NULL;
         photo_jpeg_capacity = 0;
         photo_jpeg_size = 0;

@@ -2,32 +2,24 @@
 
 #include <string.h>
 
-#include "driver/gpio.h"
-#include "driver/spi_master.h"
 #include "esp_attr.h"
 #include "esp_check.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "german_font.h"
 #include "lvgl.h"
+#include "memory.h"
+#include "display_hw.h"
 #include "touch.h"
 
-#define TFT_HOST SPI2_HOST
-#define TFT_PIN_MOSI 13
-#define TFT_PIN_MISO 12
-#define TFT_PIN_CLK 14
-#define TFT_PIN_CS 15
-#define TFT_PIN_DC 2
-#define TFT_PIN_BL 21
-#define LVGL_BUFFER_ROWS 20
 #define LVGL_LINE_CAPACITY 256
 #define PHOTO_FS_LETTER 'P'
 #define PHOTO_FS_PATH "P:photo.jpg"
 
 static const char *TAG = "display";
-static spi_device_handle_t tft;
 static lv_display_t *lv_display;
 static lv_obj_t *screen;
 static lv_obj_t *page_timer_arc;
@@ -41,8 +33,7 @@ static size_t photo_fs_size;
 static size_t photo_fs_position;
 static lv_fs_drv_t photo_fs_driver;
 static lv_point_precise_t line_points[LVGL_LINE_CAPACITY][2];
-DMA_ATTR static uint8_t display_buffer[DISPLAY_WIDTH * LVGL_BUFFER_ROWS * 2]
-    __attribute__((aligned(4)));
+static uint8_t *display_buffer;
 
 static bool photo_fs_ready(lv_fs_drv_t *driver)
 {
@@ -114,54 +105,19 @@ static lv_color_t color_from_rgb565(uint16_t color)
     return lv_color_make(red, green, blue);
 }
 
-static esp_err_t send_bytes(bool data, const void *bytes, size_t length)
+static void set_scaled_position(lv_obj_t *object, int x, int y)
 {
-    gpio_set_level(TFT_PIN_DC, data);
-    spi_transaction_t transaction = {
-        .length = length * 8,
-        .tx_buffer = bytes,
-    };
-    return spi_device_transmit(tft, &transaction);
+    lv_obj_set_pos(object, UI_SCALE_X(x), UI_SCALE_Y(y));
 }
 
-static void command(uint8_t value)
+static void set_scaled_size(lv_obj_t *object, int width, int height)
 {
-    send_bytes(false, &value, 1);
-}
-
-static void data_bytes(const void *values, size_t length)
-{
-    send_bytes(true, values, length);
-}
-
-static void set_window(int x, int y, int width, int height)
-{
-    uint8_t range[4];
-    command(0x2A);
-    range[0] = x >> 8;
-    range[1] = x;
-    range[2] = (x + width - 1) >> 8;
-    range[3] = x + width - 1;
-    data_bytes(range, sizeof(range));
-    command(0x2B);
-    range[0] = y >> 8;
-    range[1] = y;
-    range[2] = (y + height - 1) >> 8;
-    range[3] = y + height - 1;
-    data_bytes(range, sizeof(range));
-    command(0x2C);
+    lv_obj_set_size(object, UI_SCALE_X(width), UI_SCALE_Y(height));
 }
 
 static void flush_display(lv_display_t *display, const lv_area_t *area, uint8_t *pixels)
 {
-    int width = area->x2 - area->x1 + 1;
-    int height = area->y2 - area->y1 + 1;
-    set_window(area->x1, area->y1, width, height);
-    esp_err_t err = send_bytes(true, pixels, (size_t)width * height * 2);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "LVGL display flush failed: %s", esp_err_to_name(err));
-    }
-    lv_display_flush_ready(display);
+    display_hw_flush(display, area, pixels);
 }
 
 static uint32_t lvgl_tick(void)
@@ -180,80 +136,12 @@ static void lvgl_touch_read(lv_indev_t *indev, lv_indev_data_t *data)
         touch_y = y;
     }
     data->state = touch_pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
-    data->point.x = touch_x;
-    data->point.y = touch_y;
+    data->point.x = UI_SCALE_X(touch_x);
+    data->point.y = UI_SCALE_Y(touch_y);
 }
 
 esp_err_t display_init(void)
 {
-    gpio_config_t dc_config = {
-        .pin_bit_mask = 1ULL << TFT_PIN_DC,
-        .mode = GPIO_MODE_OUTPUT,
-    };
-    ESP_RETURN_ON_ERROR(gpio_config(&dc_config), TAG, "configure display DC");
-    gpio_config_t backlight_config = {
-        .pin_bit_mask = 1ULL << TFT_PIN_BL,
-        .mode = GPIO_MODE_OUTPUT,
-    };
-    ESP_RETURN_ON_ERROR(gpio_config(&backlight_config), TAG, "configure backlight");
-    gpio_set_level(TFT_PIN_BL, 0);
-
-    spi_bus_config_t bus = {
-        .mosi_io_num = TFT_PIN_MOSI,
-        .miso_io_num = TFT_PIN_MISO,
-        .sclk_io_num = TFT_PIN_CLK,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-        .max_transfer_sz = sizeof(display_buffer),
-    };
-    ESP_RETURN_ON_ERROR(spi_bus_initialize(TFT_HOST, &bus, SPI_DMA_CH_AUTO),
-                        TAG, "initialize SPI bus");
-    spi_device_interface_config_t device = {
-        .clock_speed_hz = 40000000,
-        .mode = 0,
-        .spics_io_num = TFT_PIN_CS,
-        .queue_size = 1,
-    };
-    ESP_RETURN_ON_ERROR(spi_bus_add_device(TFT_HOST, &device, &tft),
-                        TAG, "add TFT device");
-
-    gpio_set_level(TFT_PIN_BL, 1);
-    vTaskDelay(pdMS_TO_TICKS(20));
-    command(0x01);
-    vTaskDelay(pdMS_TO_TICKS(120));
-    command(0x28);
-    command(0xCF); data_bytes((uint8_t[]){0x00, 0xC1, 0x30}, 3);
-    command(0xED); data_bytes((uint8_t[]){0x64, 0x03, 0x12, 0x81}, 4);
-    command(0xE8); data_bytes((uint8_t[]){0x85, 0x00, 0x78}, 3);
-    command(0xCB); data_bytes((uint8_t[]){0x39, 0x2C, 0x00, 0x34, 0x02}, 5);
-    command(0xF7); data_bytes((uint8_t[]){0x20}, 1);
-    command(0xEA); data_bytes((uint8_t[]){0x00, 0x00}, 2);
-    command(0xC0); data_bytes((uint8_t[]){0x10}, 1);
-    command(0xC1); data_bytes((uint8_t[]){0x00}, 1);
-    command(0xC5); data_bytes((uint8_t[]){0x30, 0x30}, 2);
-    command(0xC7); data_bytes((uint8_t[]){0xB7}, 1);
-    command(0x3A); data_bytes((uint8_t[]){0x55}, 1);
-    command(0x36); data_bytes((uint8_t[]){0x08}, 1);
-    command(0xB1); data_bytes((uint8_t[]){0x00, 0x1A}, 2);
-    command(0xB6); data_bytes((uint8_t[]){0x08, 0x82, 0x27}, 3);
-    command(0xF2); data_bytes((uint8_t[]){0x00}, 1);
-    command(0x26); data_bytes((uint8_t[]){0x01}, 1);
-    command(0xE0); data_bytes((uint8_t[]){0x0F, 0x2A, 0x28, 0x08, 0x0E, 0x08, 0x54, 0xA9,
-                                          0x43, 0x0A, 0x0F, 0x00, 0x00, 0x00, 0x00}, 15);
-    command(0xE1); data_bytes((uint8_t[]){0x00, 0x15, 0x17, 0x07, 0x11, 0x06, 0x2B, 0x56,
-                                          0x3C, 0x05, 0x10, 0x0F, 0x3F, 0x3F, 0x0F}, 15);
-    command(0x2B);
-    data_bytes((uint8_t[]){0x00, 0x00, 0x01, 0x3F}, 4);
-    command(0x2A);
-    data_bytes((uint8_t[]){0x00, 0x00, 0x00, 0xEF}, 4);
-    command(0x11);
-    vTaskDelay(pdMS_TO_TICKS(120));
-    command(0x36);
-    data_bytes((uint8_t[]){0x28}, 1);
-    command(0x21);
-    command(0x29);
-    vTaskDelay(pdMS_TO_TICKS(20));
-
     lv_init();
     lv_fs_drv_init(&photo_fs_driver);
     photo_fs_driver.letter = PHOTO_FS_LETTER;
@@ -265,12 +153,18 @@ esp_err_t display_init(void)
     photo_fs_driver.tell_cb = photo_fs_tell;
     lv_fs_drv_register(&photo_fs_driver);
     lv_tick_set_cb(lvgl_tick);
-    lv_display = lv_display_create(DISPLAY_WIDTH, DISPLAY_HEIGHT);
+    lv_display = lv_display_create(BOARD_DISPLAY_WIDTH, BOARD_DISPLAY_HEIGHT);
     if (!lv_display) return ESP_ERR_NO_MEM;
     lv_display_set_color_format(lv_display, LV_COLOR_FORMAT_RGB565_SWAPPED);
-    lv_display_set_buffers(lv_display, display_buffer, NULL, sizeof(display_buffer),
+    size_t buffer_size = (size_t)BOARD_DISPLAY_WIDTH *
+                         BOARD_DISPLAY_BUFFER_ROWS * sizeof(uint16_t);
+    display_buffer = memory_alloc(buffer_size, MEMORY_ALLOC_DMA);
+    if (!display_buffer) return ESP_ERR_NO_MEM;
+    lv_display_set_buffers(lv_display, display_buffer, NULL, buffer_size,
                            LV_DISPLAY_RENDER_MODE_PARTIAL);
     lv_display_set_flush_cb(lv_display, flush_display);
+    ESP_RETURN_ON_ERROR(display_hw_init(lv_display), TAG,
+                        "initialize display hardware");
     screen = lv_screen_active();
     lv_obj_set_scrollable(screen, false);
     lv_obj_set_style_bg_color(screen, color_from_rgb565(0x0841), 0);
@@ -282,7 +176,8 @@ esp_err_t display_init(void)
     lv_indev_set_display(touch_indev, lv_display);
     lv_indev_set_read_cb(touch_indev, lvgl_touch_read);
     lv_refr_now(lv_display);
-    ESP_LOGI(TAG, "ILI9341 ready with LVGL partial rendering");
+    ESP_LOGI(TAG, "%s ready at %ux%u with LVGL partial rendering", BOARD_NAME,
+             BOARD_DISPLAY_WIDTH, BOARD_DISPLAY_HEIGHT);
     return ESP_OK;
 }
 
@@ -293,8 +188,8 @@ void display_process(void)
 
 bool display_touch_read(int *x, int *y)
 {
-    if (x) *x = touch_x;
-    if (y) *y = touch_y;
+    if (x) *x = (touch_x * UI_SCALE_X_DEN) / UI_SCALE_X_NUM;
+    if (y) *y = (touch_y * UI_SCALE_Y_DEN) / UI_SCALE_Y_NUM;
     return touch_pressed;
 }
 
@@ -329,8 +224,8 @@ void display_fill_rect(int x, int y, int width, int height, uint16_t color)
 
     lv_obj_t *object = new_object();
     if (!object) return;
-    lv_obj_set_pos(object, x, y);
-    lv_obj_set_size(object, width, height);
+    set_scaled_position(object, x, y);
+    set_scaled_size(object, width, height);
     lv_obj_set_style_bg_color(object, color_from_rgb565(color), 0);
     lv_obj_set_style_bg_opa(object, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(object, 0, 0);
@@ -347,8 +242,8 @@ void display_fill_rect_opa(int x, int y, int width, int height, uint16_t color,
 
     lv_obj_t *object = new_object();
     if (!object) return;
-    lv_obj_set_pos(object, x, y);
-    lv_obj_set_size(object, width, height);
+    set_scaled_position(object, x, y);
+    set_scaled_size(object, width, height);
     lv_obj_set_style_bg_color(object, color_from_rgb565(color), 0);
     lv_obj_set_style_bg_opa(object, opacity, 0);
     lv_obj_set_style_radius(object, 0, 0);
@@ -370,8 +265,8 @@ void display_fill_round_rect_radius(int x, int y, int width, int height,
 
     lv_obj_t *object = new_object();
     if (!object) return;
-    lv_obj_set_pos(object, x, y);
-    lv_obj_set_size(object, width, height);
+    set_scaled_position(object, x, y);
+    set_scaled_size(object, width, height);
     lv_obj_set_style_bg_color(object, color_from_rgb565(color), 0);
     lv_obj_set_style_bg_opa(object, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(object, radius, 0);
@@ -395,6 +290,10 @@ void display_line(int x0, int y0, int x1, int y1, uint16_t color)
         return;
     }
 
+    x0 = UI_SCALE_X(x0);
+    y0 = UI_SCALE_Y(y0);
+    x1 = UI_SCALE_X(x1);
+    y1 = UI_SCALE_Y(y1);
     int left = x0 < x1 ? x0 : x1;
     int top = y0 < y1 ? y0 : y1;
     lv_point_precise_t *points = line_points[line_count++];
@@ -427,9 +326,12 @@ void display_circle(int center_x, int center_y, int radius, uint16_t color)
     if (radius <= 0) return;
     lv_obj_t *object = new_object();
     if (!object) return;
-    int diameter = radius * 2 + 1;
-    lv_obj_set_pos(object, center_x - radius, center_y - radius);
-    lv_obj_set_size(object, diameter, diameter);
+    int x_radius = UI_SCALE_X(radius);
+    int y_radius = UI_SCALE_Y(radius);
+    int diameter_x = x_radius * 2 + 1;
+    int diameter_y = y_radius * 2 + 1;
+    set_scaled_position(object, center_x - radius, center_y - radius);
+    lv_obj_set_size(object, diameter_x, diameter_y);
     lv_obj_set_style_radius(object, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_border_color(object, color_from_rgb565(color), 0);
     lv_obj_set_style_border_width(object, 1, 0);
@@ -440,9 +342,10 @@ void display_fill_circle(int center_x, int center_y, int radius, uint16_t color)
     if (radius <= 0) return;
     lv_obj_t *object = new_object();
     if (!object) return;
-    int diameter = radius * 2 + 1;
-    lv_obj_set_pos(object, center_x - radius, center_y - radius);
-    lv_obj_set_size(object, diameter, diameter);
+    int diameter_x = UI_SCALE_X(radius) * 2 + 1;
+    int diameter_y = UI_SCALE_Y(radius) * 2 + 1;
+    set_scaled_position(object, center_x - radius, center_y - radius);
+    lv_obj_set_size(object, diameter_x, diameter_y);
     lv_obj_set_style_radius(object, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(object, color_from_rgb565(color), 0);
     lv_obj_set_style_bg_opa(object, LV_OPA_COVER, 0);
@@ -458,8 +361,8 @@ void display_set_page_timer(uint8_t elapsed_seconds)
             return;
         }
         lv_obj_remove_style_all(page_timer_arc);
-        lv_obj_set_size(page_timer_arc, 14, 14);
-        lv_obj_set_pos(page_timer_arc, 207, 225);
+        set_scaled_size(page_timer_arc, 14, 14);
+        set_scaled_position(page_timer_arc, 207, 225);
         lv_obj_set_clickable(page_timer_arc, false);
         lv_obj_set_scrollable(page_timer_arc, false);
         lv_arc_set_rotation(page_timer_arc, 270);
@@ -548,8 +451,8 @@ esp_err_t display_draw_tide_chart(const int32_t *values, size_t count,
     }
 
     lv_obj_remove_style_all(chart);
-    lv_obj_set_pos(chart, 42, 119);
-    lv_obj_set_size(chart, 236, 50);
+    set_scaled_position(chart, 42, 119);
+    set_scaled_size(chart, 236, 50);
     lv_obj_set_clickable(chart, false);
     lv_obj_set_scrollable(chart, false);
     lv_obj_set_style_bg_opa(chart, LV_OPA_TRANSP, LV_PART_MAIN);
@@ -597,11 +500,11 @@ esp_err_t display_draw_qr_code(int x, int y, int size, const char *data)
 
     lv_obj_t *qr = lv_qrcode_create(screen);
     if (!qr) return ESP_ERR_NO_MEM;
-    lv_qrcode_set_size(qr, size);
+    lv_qrcode_set_size(qr, UI_SCALE_X(size));
     lv_qrcode_set_quiet_zone(qr, true);
     lv_qrcode_set_dark_color(qr, lv_color_black());
     lv_qrcode_set_light_color(qr, lv_color_white());
-    lv_obj_set_pos(qr, x, y);
+    set_scaled_position(qr, x, y);
     if (lv_qrcode_update(qr, data, (uint32_t)strlen(data)) != LV_RESULT_OK) {
         lv_obj_delete(qr);
         return ESP_FAIL;
@@ -624,11 +527,16 @@ esp_err_t display_draw_image(int x, int y, const lv_image_dsc_t *image)
     lv_obj_t *object = lv_image_create(screen);
     if (!object) return ESP_ERR_NO_MEM;
     lv_image_set_src(object, image);
-    lv_obj_set_pos(object, x, y);
+    set_scaled_position(object, x, y);
+    lv_image_set_scale_x(object,
+        (uint32_t)(UI_SCALE_X_NUM * LV_SCALE_NONE / UI_SCALE_X_DEN));
+    lv_image_set_scale_y(object,
+        (uint32_t)(UI_SCALE_Y_NUM * LV_SCALE_NONE / UI_SCALE_Y_DEN));
     return ESP_OK;
 }
 
-esp_err_t display_draw_jpeg(int x, int y, const uint8_t *data, size_t size)
+static esp_err_t draw_jpeg(int x, int y, const uint8_t *data, size_t size,
+                           bool scale_to_display)
 {
     if (!screen || !data || size < 4 || data[0] != 0xFF || data[1] != 0xD8) {
         return ESP_ERR_INVALID_ARG;
@@ -638,8 +546,24 @@ esp_err_t display_draw_jpeg(int x, int y, const uint8_t *data, size_t size)
     lv_obj_t *object = lv_image_create(screen);
     if (!object) return ESP_ERR_NO_MEM;
     lv_image_set_src(object, PHOTO_FS_PATH);
-    lv_obj_set_pos(object, x, y);
+    set_scaled_position(object, x, y);
+    if (scale_to_display) {
+        lv_image_set_scale_x(object,
+            (uint32_t)(UI_SCALE_X_NUM * LV_SCALE_NONE / UI_SCALE_X_DEN));
+        lv_image_set_scale_y(object,
+            (uint32_t)(UI_SCALE_Y_NUM * LV_SCALE_NONE / UI_SCALE_Y_DEN));
+    }
     return ESP_OK;
+}
+
+esp_err_t display_draw_jpeg(int x, int y, const uint8_t *data, size_t size)
+{
+    return draw_jpeg(x, y, data, size, true);
+}
+
+esp_err_t display_draw_photo_jpeg(int x, int y, const uint8_t *data, size_t size)
+{
+    return draw_jpeg(x, y, data, size, false);
 }
 
 static const lv_font_t *font_for_scale(uint8_t scale)
@@ -659,9 +583,9 @@ static void display_label(int x, int y, int width, int height, const char *text,
     }
     lv_label_set_text(label, text);
     lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
-    lv_obj_set_pos(label, x, y);
+    set_scaled_position(label, x, y);
     if (width > 0 && height > 0) {
-        lv_obj_set_size(label, width, height);
+        set_scaled_size(label, width, height);
         lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
     }
     lv_obj_set_style_text_font(label, font_for_scale(scale), 0);
