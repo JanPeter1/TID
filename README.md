@@ -52,7 +52,7 @@ The setup network and portal are both open and use HTTP without TLS. Anyone near
 
 - Weather: Open-Meteo Forecast API at 53.124279, 4.812830. The display shows current temperature, wind/gusts, precipitation, humidity, and a five-day daily forecast. Requests run on startup when connected and every six hours thereafter. Open-Meteo is for non-commercial use and requires CC BY attribution.
 - Marine: Open-Meteo Marine API. The firmware finds the next modeled local water-level extremum after the current forecast time and shows it with a 12-hour trend. Coastal model levels are approximate and must not be used for navigation or safety decisions.
-- House information: compile-time pages and scaled thumbnails are in `assets/info/`; their QR codes open the corresponding source page. Calendar: endpoint is in `main/data.c`, credentials are entered through setup, and HTML parsing is currently a simple text fallback.
+- House information: compile-time pages and scaled thumbnails are in `assets/info/`; their QR codes open the corresponding source page. The occupancy calendar downloads its public date-to-group assignments and group names over HTTPS, and displays a scrollable month grid with month navigation.
 - Events: VVV Texel German event overview. A compact GraphQL request retrieves timeslots in the local date range; matching entries are filtered to today and tomorrow and up to 12 are stored.
 - Photos: the processor writes `manifest.json` and size-limited JPEGs; the firmware fetches a random photo when a photo subpage is opened. Place names are reverse-geocoded with Nominatim/OpenStreetMap from EXIF GPS coordinates.
 

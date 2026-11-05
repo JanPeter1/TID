@@ -35,13 +35,17 @@ typedef enum {
 
 static page_t active_page;
 static uint8_t active_subpage[PAGE_COUNT];
-static const uint8_t subpage_counts[PAGE_COUNT] = {1, 3, 2, 3, 0};
+static const uint8_t subpage_counts[PAGE_COUNT] = {1, 1, 2, 3, 0};
 static bool setup_credentials_visible;
 static bool qr_visible;
 static bool photo_request_pending;
 static bool sleep_pending;
+static int calendar_month_offset;
+static int calendar_scroll_offset;
 static TickType_t setup_visible_until;
 static TickType_t touch_started_at;
+static int touch_start_x;
+static int touch_start_y;
 
 static void draw_icon(int index, int center_x, int center_y, uint16_t color)
 {
@@ -129,6 +133,7 @@ static uint8_t page_subpage_count(page_t page, const app_data_t *data)
 
 static void draw_subpage_indicator(const app_data_t *data)
 {
+    if (active_page == PAGE_CALENDAR) return;
     char indicator[12];
     if (active_page == PAGE_PHOTOS) {
         if (data->photo_count) {
@@ -148,7 +153,7 @@ static void draw_subpage_indicator(const app_data_t *data)
                  active_subpage[active_page] + 1,
                  page_subpage_count(active_page, data));
     }
-    display_text_bg(151, 225, indicator, COLOR_ORANGE, COLOR_PANEL, 1);
+    display_text_bg(112, 225, indicator, COLOR_ORANGE, COLOR_PANEL, 1);
 }
 
 static void draw_wifi_icon(int center_x, int center_y, uint16_t color, int rssi)
@@ -156,7 +161,7 @@ static void draw_wifi_icon(int center_x, int center_y, uint16_t color, int rssi)
     int active_bars = rssi >= -60 ? 4 : rssi >= -70 ? 3 : rssi >= -80 ? 2 : 1;
     for (int i = 0; i < 4; i++) {
         int height = 3 + i * 2;
-        display_fill_rect(center_x + i * 3, center_y + 5 - height, 2, height,
+        display_fill_rect(center_x - 6 + i * 3, center_y + 5 - height, 2, height,
                           config_wifi_connected() && i < active_bars
                               ? color : COLOR_MUTED);
     }
@@ -201,7 +206,7 @@ static void draw_setup_icon(int x, int y, uint16_t color)
     display_fill_circle(x, y, 2, COLOR_PANEL);
 }
 
-static void draw_status(void)
+static void draw_status(uint8_t timer_progress)
 {
     display_fill_rect(0, 224, DISPLAY_WIDTH, 16, COLOR_PANEL);
     char time_text[9] = "--:-- ";
@@ -215,10 +220,11 @@ static void draw_status(void)
     }
     display_text_bg(4, 225, time_text, COLOR_ORANGE, COLOR_PANEL, 1);
     display_text_bg(48, 225, date_text, COLOR_WHITE, COLOR_PANEL, 1);
+    display_set_page_timer(timer_progress);
     int rssi = config_wifi_rssi();
     uint16_t wifi_color = !config_wifi_connected() ? 0xF800
         : rssi >= -60 ? COLOR_GREEN : rssi >= -75 ? 0xFFE0 : 0xF800;
-    draw_wifi_icon(122, 232, wifi_color, rssi);
+    draw_wifi_icon(186, 232, wifi_color, rssi);
     if (setup_credentials_visible && xTaskGetTickCount() < setup_visible_until) {
         display_fill_rect(0, 194, DISPLAY_WIDTH, 30, COLOR_ORANGE);
         display_text_bg(4, 194, config_ap_ssid(), COLOR_BACKGROUND, COLOR_ORANGE, 1);
@@ -228,12 +234,12 @@ static void draw_status(void)
         setup_credentials_visible = false;
     }
     if (qr_visible) {
-        draw_close_icon(241, 232);
+        draw_close_icon(242, 232);
     } else {
-        draw_qr_icon(241, 232);
+        draw_qr_icon(242, 232);
     }
-    draw_sleep_icon(272, 232);
-    draw_setup_icon(303, 232,
+    draw_sleep_icon(270, 232);
+    draw_setup_icon(298, 232,
                     config_setup_ap_active() ? COLOR_ORANGE : COLOR_WHITE);
 }
 
@@ -384,6 +390,63 @@ static void draw_weather_icon(int code, int x, int y, int scale)
     }
 }
 
+static float tide_curve_value(const float *values, size_t count, size_t segment,
+                              float t)
+{
+    float p0 = values[segment ? segment - 1 : segment];
+    float p1 = values[segment];
+    float p2 = values[segment + 1];
+    float p3 = values[segment + 2 < count ? segment + 2 : segment + 1];
+    float t2 = t * t;
+    float t3 = t2 * t;
+    return 0.5f * ((2.0f * p1) + (-p0 + p2) * t +
+                   (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * t2 +
+                   (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * t3);
+}
+
+static int tide_graph_y(float value, float minimum, float maximum)
+{
+    const int graph_bottom = 168;
+    const int graph_height = 48;
+    if (maximum - minimum < 0.01f) return graph_bottom - graph_height / 2;
+    if (value < minimum) value = minimum;
+    if (value > maximum) value = maximum;
+    return graph_bottom - (int)lroundf(graph_height * (value - minimum) /
+                                       (maximum - minimum));
+}
+
+static void draw_tide_graph(const float *values, size_t count,
+                            float minimum, float maximum)
+{
+    const size_t steps_per_segment = 4;
+    size_t chart_count = (count - 1) * steps_per_segment + 1;
+    int32_t chart_values[(TIDE_SAMPLES - 1) * steps_per_segment + 1];
+    if (chart_count > sizeof(chart_values) / sizeof(chart_values[0])) {
+        ESP_LOGE("ui", "Too many tide samples for chart");
+        return;
+    }
+
+    for (size_t i = 0; i < chart_count; i++) {
+        size_t segment = i / steps_per_segment;
+        float t = (float)(i % steps_per_segment) / steps_per_segment;
+        if (i == chart_count - 1) {
+            segment = count - 2;
+            t = 1.0f;
+        }
+        float value = tide_curve_value(values, count, segment, t);
+        if (value < minimum) value = minimum;
+        if (value > maximum) value = maximum;
+        chart_values[i] = (int32_t)lroundf(value * 100.0f);
+    }
+
+    esp_err_t err = display_draw_tide_chart(
+        chart_values, chart_count, (int32_t)lroundf(minimum * 100.0f),
+        (int32_t)lroundf(maximum * 100.0f));
+    if (err != ESP_OK) {
+        ESP_LOGE("ui", "Could not draw tide chart: %s", esp_err_to_name(err));
+    }
+}
+
 static void draw_weather(const app_data_t *data, uint8_t subpage)
 {
     if (subpage == 2) {
@@ -397,24 +460,21 @@ static void draw_weather(const app_data_t *data, uint8_t subpage)
         display_text(34, 78, data->next_tide, COLOR_GREEN, 1);
         display_text(34, 104, "WASSERSTAND - NAECHSTE 12 STUNDEN",
                      COLOR_WHITE, 1);
+        float values[TIDE_SAMPLES];
         float minimum = INFINITY;
         float maximum = -INFINITY;
-        int valid_samples = 0;
+        size_t valid_samples = 0;
         for (int i = 0; i < TIDE_SAMPLES; i++) {
             if (!isfinite(data->tide_samples[i])) continue;
             if (data->tide_samples[i] < minimum) minimum = data->tide_samples[i];
             if (data->tide_samples[i] > maximum) maximum = data->tide_samples[i];
-            valid_samples++;
+            values[valid_samples++] = data->tide_samples[i];
         }
-        float span = maximum - minimum;
-        display_line(38, 170, 282, 170, COLOR_MUTED);
-        for (int i = 0; i < TIDE_SAMPLES; i++) {
-            if (!isfinite(data->tide_samples[i])) continue;
-            int height = span > 0.01f
-                ? 8 + (int)(40.0f * (data->tide_samples[i] - minimum) / span)
-                : 28;
-            display_fill_rect(42 + i * 19, 170 - height, 10, height,
-                              i == 0 ? COLOR_ORANGE : COLOR_GREEN);
+        if (valid_samples >= 2) {
+            draw_tide_graph(values, valid_samples, minimum, maximum);
+        } else if (valid_samples == 1) {
+            display_fill_circle(160, tide_graph_y(values[0], minimum, maximum),
+                                2, COLOR_ORANGE);
         }
         if (valid_samples) {
             char level_label[32];
@@ -424,8 +484,6 @@ static void draw_weather(const app_data_t *data, uint8_t subpage)
         } else {
             display_text(54, 180, "KEINE VERLAUFSWERTE", COLOR_MUTED, 1);
         }
-        display_text(34, 194, "MODELLWERTE - KEINE NAVIGATIONSDATEN",
-                     COLOR_MUTED, 1);
         return;
     }
 
@@ -442,9 +500,9 @@ static void draw_weather(const app_data_t *data, uint8_t subpage)
     char line[52];
     if (subpage == 0) {
         draw_weather_icon(data->weather_code, 255, 103, 2);
-        snprintf(line, sizeof(line), "%.1f C", data->temperature_c);
+        snprintf(line, sizeof(line), "%.1f °C", data->temperature_c);
         display_text(34, 76, line, COLOR_WHITE, 2);
-        snprintf(line, sizeof(line), "GEFÜHLT %.1f C", data->feels_like_c);
+        snprintf(line, sizeof(line), "GEFÜHLT %.1f °C", data->feels_like_c);
         display_text(34, 101, line, COLOR_MUTED, 1);
         display_text(34, 122, weather_description(data->weather_code), COLOR_ORANGE, 1);
         snprintf(line, sizeof(line), "WIND %.0f KM/H  BOEEN %.0f",
@@ -460,19 +518,16 @@ static void draw_weather(const app_data_t *data, uint8_t subpage)
             if (!data->days[i].date[0]) continue;
             int row_y = 78 + displayed_days * 27;
             uint16_t color = displayed_days == 0 ? COLOR_ORANGE : COLOR_WHITE;
-            char date[12];
             char temperature[16];
             char rain_probability[8];
-            snprintf(date, sizeof(date), "%s %.5s",
-                     weekday_abbreviation(data->days[i].date),
-                     data->days[i].date + 5);
-            snprintf(temperature, sizeof(temperature), "%.0f/%.0fC",
+            snprintf(temperature, sizeof(temperature), "%.0f/%.0f°C",
                      data->days[i].high_c, data->days[i].low_c);
             snprintf(rain_probability, sizeof(rain_probability), "%d%%",
                      data->days[i].rain_probability);
             draw_weather_icon(data->days[i].weather_code, 47, row_y + 8, 1);
-            display_text(63, row_y, date, color, 1);
-            display_text(118, row_y,
+            display_text(63, row_y, weekday_abbreviation(data->days[i].date),
+                         color, 1);
+            display_text(92, row_y,
                          weather_description(data->days[i].weather_code), color, 1);
             display_text(206, row_y, temperature, color, 1);
             display_text(259, row_y, rain_probability, color, 1);
@@ -481,6 +536,244 @@ static void draw_weather(const app_data_t *data, uint8_t subpage)
         if (displayed_days == 0) {
             display_text(34, 82, "VORHERSAGE NICHT VERFUEGBAR", COLOR_MUTED, 1);
         }
+    }
+}
+
+static const char *calendar_month_name(int month)
+{
+    static const char *months[] = {
+        "Januar", "Februar", "März", "April", "Mai", "Juni",
+        "Juli", "August", "September", "Oktober", "November", "Dezember",
+    };
+    return month >= 1 && month <= 12 ? months[month - 1] : "";
+}
+
+static int calendar_days_in_month(int year, int month)
+{
+    static const int month_lengths[] =
+        {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    int days = month_lengths[month - 1];
+    bool leap_year = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    return month == 2 && leap_year ? days + 1 : days;
+}
+
+static void calendar_month_layout(const app_data_t *data, int month_offset,
+                                  int *year, int *month, int *first_weekday,
+                                  int *days, int *rows)
+{
+    time_t now = time(NULL);
+    struct tm local_time;
+    if (now >= 1704067200 && localtime_r(&now, &local_time)) {
+        *year = local_time.tm_year + 1900;
+        *month = local_time.tm_mon + 1;
+    } else if (data->calendar_entry_count) {
+        *year = data->calendar_entries[0].year;
+        *month = data->calendar_entries[0].month;
+    } else {
+        *year = 2026;
+        *month = 1;
+    }
+
+    int month_index = *year * 12 + (*month - 1) + month_offset;
+    *year = month_index / 12;
+    *month = month_index % 12 + 1;
+    if (*month <= 0) {
+        *month += 12;
+        (*year)--;
+    }
+
+    *days = calendar_days_in_month(*year, *month);
+    struct tm first_day = {
+        .tm_year = *year - 1900,
+        .tm_mon = *month - 1,
+        .tm_mday = 1,
+        .tm_hour = 12,
+        .tm_isdst = -1,
+    };
+    if (mktime(&first_day) == (time_t)-1) {
+        *first_weekday = 0;
+    } else {
+        *first_weekday = (first_day.tm_wday + 6) % 7;
+    }
+    *rows = (*first_weekday + *days + 6) / 7;
+}
+
+static int calendar_scroll_limit(const app_data_t *data)
+{
+    int year, month, first_weekday, days, rows;
+    calendar_month_layout(data, calendar_month_offset, &year, &month,
+                          &first_weekday, &days, &rows);
+    int content_height = rows * 30 - 2;
+    const int viewport_height = 126;
+    return content_height > viewport_height
+        ? content_height - viewport_height : 0;
+}
+
+static const calendar_entry_t *calendar_booking_for(
+    const app_data_t *data, int year, int month, int day)
+{
+    for (uint16_t i = 0; i < data->calendar_entry_count; i++) {
+        const calendar_entry_t *entry = &data->calendar_entries[i];
+        if (entry->year == year && entry->month == month && entry->day == day) {
+            return entry;
+        }
+    }
+    return NULL;
+}
+
+static uint16_t calendar_group_color(uint8_t group_id)
+{
+    static const uint16_t colors[DATA_CALENDAR_GROUPS] = {
+        COLOR_PANEL, 0x04C0, 0xFE60, 0xB800, 0xCB20, 0x432C,
+        0x18CE, 0x2444, 0x8004, 0x4810, 0x3902, 0x0451,
+        0x10A3, 0x10A3, 0x10A3, 0x10A3,
+    };
+    return group_id < DATA_CALENDAR_GROUPS ? colors[group_id] : COLOR_PANEL;
+}
+
+static uint16_t calendar_group_text_color(uint8_t group_id)
+{
+    return group_id == 2 ? 0x2104 : COLOR_WHITE;
+}
+
+static void calendar_short_group_name(const char *name, char *short_name,
+                                      size_t short_name_size)
+{
+    const char *plus = strchr(name, '+');
+    if (plus) {
+        const char *second_name = plus + 1;
+        while (*second_name == ' ') second_name++;
+        snprintf(short_name, short_name_size, "%c+%c.",
+                 name[0], second_name[0]);
+        return;
+    }
+    const char *space = strchr(name, ' ');
+    if (space && space[1]) {
+        size_t first_length = (size_t)(space - name);
+        if (first_length <= 3) {
+            snprintf(short_name, short_name_size, "%.*s %c.",
+                     (int)first_length, name, space[1]);
+        } else {
+            snprintf(short_name, short_name_size, "%c. %c.",
+                     name[0], space[1]);
+        }
+    } else {
+        snprintf(short_name, short_name_size, "%.5s%s", name,
+                 strlen(name) > 5 ? "." : "");
+    }
+}
+
+static void draw_calendar(const app_data_t *data)
+{
+    static const char *weekdays[] = {"Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"};
+    const int grid_left = 30;
+    const int grid_top = 92;
+    const int cell_width = 35;
+    const int cell_height = 28;
+    const int column_pitch = 37;
+    const int row_pitch = 30;
+    const int viewport_bottom = 218;
+
+    int year, month, first_weekday, days, rows;
+    calendar_month_layout(data, calendar_month_offset, &year, &month,
+                          &first_weekday, &days, &rows);
+    int scroll_limit = calendar_scroll_limit(data);
+    if (calendar_scroll_offset < 0) calendar_scroll_offset = 0;
+    if (calendar_scroll_offset > scroll_limit) calendar_scroll_offset = scroll_limit;
+
+    char month_title[32];
+    const char *month_name = calendar_month_name(month);
+    snprintf(month_title, sizeof(month_title), "%s %d",
+             month_name, year);
+    display_text(30, 40, "BELEGUNGSKALENDER", COLOR_ORANGE, 1);
+    display_text(30, 56, month_title, COLOR_WHITE, 1);
+    size_t month_name_characters = 0;
+    for (const unsigned char *character = (const unsigned char *)month_name;
+         *character; character++) {
+        if ((*character & 0xC0) != 0x80) month_name_characters++;
+    }
+    int month_name_width = (int)month_name_characters * 7;
+    display_line(30, 70, 30 + month_name_width - 1, 70, COLOR_ORANGE);
+    for (int column = 0; column < 7; column++) {
+        display_text_box(grid_left + column * column_pitch, 76,
+                         cell_width, 15, weekdays[column],
+                         column == 6 ? COLOR_ORANGE : COLOR_MUTED, 1);
+    }
+
+    time_t now = time(NULL);
+    struct tm today;
+    bool today_valid = now >= 1704067200 && localtime_r(&now, &today);
+    int previous_month = month == 1 ? 12 : month - 1;
+    int previous_year = month == 1 ? year - 1 : year;
+    int previous_month_days = calendar_days_in_month(previous_year, previous_month);
+    int total_days = rows * 7;
+
+    for (int index = 0; index < total_days; index++) {
+        int day = index - first_weekday + 1;
+        int cell_year = year;
+        int cell_month = month;
+        bool in_month = day >= 1 && day <= days;
+        if (day < 1) {
+            day += previous_month_days;
+            cell_year = previous_year;
+            cell_month = previous_month;
+        } else if (day > days) {
+            day -= days;
+            cell_month = month == 12 ? 1 : month + 1;
+            cell_year = month == 12 ? year + 1 : year;
+        }
+
+        int row = index / 7;
+        int column = index % 7;
+        int x = grid_left + column * column_pitch;
+        int y = grid_top + row * row_pitch - calendar_scroll_offset;
+        if (y + cell_height <= grid_top || y >= viewport_bottom) continue;
+
+        const calendar_entry_t *booking =
+            calendar_booking_for(data, cell_year, cell_month, day);
+        uint16_t background = !in_month ? COLOR_BACKGROUND
+            : booking ? calendar_group_color(booking->group_id) : COLOR_PANEL;
+        int clipped_y = y < grid_top ? grid_top : y;
+        int clipped_bottom = y + cell_height > viewport_bottom
+            ? viewport_bottom : y + cell_height;
+        if (clipped_y != y || clipped_bottom != y + cell_height) {
+            display_fill_rect(x, clipped_y, cell_width,
+                              clipped_bottom - clipped_y, background);
+            continue;
+        }
+        display_fill_round_rect_radius(x, y, cell_width, cell_height, 4,
+                                       background);
+
+        char day_text[3];
+        snprintf(day_text, sizeof(day_text), "%d", day);
+        uint16_t booking_text_color = booking
+            ? calendar_group_text_color(booking->group_id) : COLOR_WHITE;
+        uint16_t day_color = in_month ? booking_text_color : COLOR_MUTED;
+        display_text_box(x + 1, y + 1, cell_width - 2, 14,
+                         day_text, day_color, 1);
+
+        if (booking && booking->group_id < DATA_CALENDAR_GROUPS) {
+            char group_name[16];
+            calendar_short_group_name(
+                data->calendar_group_names[booking->group_id],
+                group_name, sizeof(group_name));
+            display_text_box(x + 1, y + 14, cell_width - 2, 14,
+                             group_name, booking_text_color, 1);
+        }
+        if (today_valid && in_month && today.tm_year + 1900 == year &&
+            today.tm_mon + 1 == month && today.tm_mday == day) {
+            display_line(x, y, x + cell_width - 1, y, COLOR_ORANGE);
+            display_line(x, y + cell_height - 1, x + cell_width - 1,
+                         y + cell_height - 1, COLOR_ORANGE);
+            display_line(x, y, x, y + cell_height - 1, COLOR_ORANGE);
+            display_line(x + cell_width - 1, y, x + cell_width - 1,
+                         y + cell_height - 1, COLOR_ORANGE);
+        }
+    }
+
+    if (!data->calendar_valid) {
+        display_text(38, 196, "BELEGUNGSDATEN WERDEN GELADEN",
+                     COLOR_MUTED, 1);
     }
 }
 
@@ -554,7 +847,7 @@ static void draw_info_page(void)
     }
 }
 
-static void draw_page(const app_data_t *data)
+static void draw_page(const app_data_t *data, uint8_t timer_progress)
 {
     display_draw_frame();
     draw_tabs();
@@ -574,7 +867,7 @@ static void draw_page(const app_data_t *data)
         draw_qr_code(url);
         draw_wrapped_text(url, 34, 185, 2, COLOR_MUTED, 0);
         draw_side_buttons();
-        draw_status();
+        draw_status(timer_progress);
         draw_subpage_indicator(data);
         return;
     }
@@ -608,16 +901,7 @@ static void draw_page(const app_data_t *data)
         display_text(34, 194, "QUELLE: TEXEL.NET", COLOR_MUTED, 1);
         break;
     case PAGE_CALENDAR:
-        {
-            char title[32];
-            snprintf(title, sizeof(title), "TEXELKALENDER - TEIL %u",
-                     active_subpage[active_page] + 1);
-            display_text(34, 40, title, COLOR_ORANGE, 1);
-        }
-        display_text(34, 56, data->calendar_valid ? "LETZTER ABRUF:" : "WARTET AUF ABRUF",
-                     COLOR_MUTED, 1);
-        draw_wrapped_text(data->calendar, 34, 74, 10, COLOR_WHITE,
-                          (size_t)active_subpage[active_page] * 340);
+        draw_calendar(data);
         break;
     case PAGE_PHOTOS:
         display_text(34, 40, "FOTOS VON TEXEL", COLOR_ORANGE, 1);
@@ -652,7 +936,7 @@ static void draw_page(const app_data_t *data)
         break;
     }
     draw_side_buttons();
-    draw_status();
+    draw_status(timer_progress);
     draw_subpage_indicator(data);
 }
 
@@ -667,9 +951,12 @@ static void app_main_task(void *unused)
     uint8_t previous_subpage = UINT8_MAX;
     bool previous_qr_visibility = false;
     bool previous_setup_visibility = false;
+    int previous_timer_second = -1;
     int previous_clock_minute = -1;
     bool previous_clock_valid = false;
     bool ntp_sync_logged = false;
+    int previous_calendar_month = calendar_month_offset;
+    int previous_calendar_scroll = calendar_scroll_offset;
     TickType_t last_auto_advance = xTaskGetTickCount();
     TickType_t last_stack_report = xTaskGetTickCount();
     while (true) {
@@ -688,6 +975,8 @@ static void app_main_task(void *unused)
         }
         if (touched && !was_touched) {
             touch_started_at = now;
+            touch_start_x = x;
+            touch_start_y = y;
             refresh_sent = false;
         }
         if (touched && !refresh_sent && now - touch_started_at > pdMS_TO_TICKS(1600)) {
@@ -701,16 +990,36 @@ static void app_main_task(void *unused)
             if (selected >= 0 && selected < PAGE_COUNT) {
                 active_page = (page_t)selected;
                 active_subpage[active_page] = 0;
+                if (active_page == PAGE_CALENDAR) calendar_scroll_offset = 0;
             }
         }
         if (touched && !was_touched && y >= 40 && y <= 218) {
-            if (x <= 28) {
+            if (active_page == PAGE_CALENDAR && x <= 28) {
+                calendar_month_offset--;
+                calendar_scroll_offset = 0;
+            } else if (active_page == PAGE_CALENDAR && x >= 292) {
+                calendar_month_offset++;
+                calendar_scroll_offset = 0;
+            } else if (active_page != PAGE_CALENDAR && x <= 28) {
                 active_subpage[active_page] =
                     (active_subpage[active_page] + active_subpage_count - 1) %
                     active_subpage_count;
-            } else if (x >= 292) {
+            } else if (active_page != PAGE_CALENDAR && x >= 292) {
                 active_subpage[active_page] =
                     (active_subpage[active_page] + 1) % active_subpage_count;
+            }
+        }
+        if (!touched && was_touched && active_page == PAGE_CALENDAR &&
+            touch_start_x > 28 && touch_start_x < 292 &&
+            touch_start_y >= 86 && touch_start_y <= 218) {
+            int vertical_drag = touch_start_y - y;
+            if (abs(vertical_drag) >= 12) {
+                calendar_scroll_offset += vertical_drag;
+                int scroll_limit = calendar_scroll_limit(&snapshot);
+                if (calendar_scroll_offset < 0) calendar_scroll_offset = 0;
+                if (calendar_scroll_offset > scroll_limit) {
+                    calendar_scroll_offset = scroll_limit;
+                }
             }
         }
         if (touched && !was_touched && y >= 224 && x >= 226 && x < 258) {
@@ -731,7 +1040,10 @@ static void app_main_task(void *unused)
         }
         was_touched = touched;
         if (active_page != previous_page ||
-            active_subpage[active_page] != previous_subpage) {
+            active_subpage[active_page] != previous_subpage ||
+            (active_page == PAGE_CALENDAR &&
+             (calendar_month_offset != previous_calendar_month ||
+              calendar_scroll_offset != previous_calendar_scroll))) {
             last_auto_advance = now;
         }
         if (qr_visible) {
@@ -770,6 +1082,12 @@ static void app_main_task(void *unused)
         }
 
         bool show_setup = setup_credentials_visible && now < setup_visible_until;
+        uint32_t elapsed_seconds =
+            (uint32_t)pdTICKS_TO_MS(now - last_auto_advance) / 1000U;
+        if (elapsed_seconds >= PAGE_ROTATE_INTERVAL_MS / 1000U) {
+            elapsed_seconds = PAGE_ROTATE_INTERVAL_MS / 1000U - 1;
+        }
+        uint8_t timer_progress = (uint8_t)elapsed_seconds;
         time_t wall_clock = time(NULL);
         struct tm local_time;
         bool clock_valid = wall_clock >= 1704067200 &&
@@ -781,6 +1099,8 @@ static void app_main_task(void *unused)
                              clock_minute != previous_clock_minute;
         bool page_changed = active_page != previous_page ||
                             active_subpage[active_page] != previous_subpage ||
+                            calendar_month_offset != previous_calendar_month ||
+                            calendar_scroll_offset != previous_calendar_scroll ||
                             qr_visible != previous_qr_visibility ||
                             show_setup != previous_setup_visibility ||
                             memcmp(&snapshot, &previous, sizeof(snapshot)) != 0;
@@ -792,23 +1112,28 @@ static void app_main_task(void *unused)
                                       active_page != PAGE_PHOTOS;
             if (active_page != PAGE_PHOTOS) photo_request_pending = false;
             if (photo_page_changed) photo_request_pending = true;
-            draw_page(&snapshot);
+            draw_page(&snapshot, timer_progress);
             if (photo_page_changed) data_request_photo();
             if (leaving_photo_page) data_release_photo();
             if (snapshot.from_cache) {
-                display_text_bg(176, 225, "CACHE", COLOR_ORANGE, COLOR_PANEL, 1);
+                display_text_bg(146, 225, "CACHE", COLOR_ORANGE, COLOR_PANEL, 1);
             }
             previous = snapshot;
             previous_page = active_page;
             previous_subpage = active_subpage[active_page];
+            previous_calendar_month = calendar_month_offset;
+            previous_calendar_scroll = calendar_scroll_offset;
             previous_qr_visibility = qr_visible;
             previous_setup_visibility = show_setup;
         } else if (clock_changed) {
-            draw_page(&snapshot);
+            draw_page(&snapshot, timer_progress);
             if (snapshot.from_cache) {
-                display_text_bg(176, 225, "CACHE", COLOR_ORANGE, COLOR_PANEL, 1);
+                display_text_bg(146, 225, "CACHE", COLOR_ORANGE, COLOR_PANEL, 1);
             }
+        } else if (previous_timer_second != timer_progress) {
+            display_set_page_timer(timer_progress);
         }
+        previous_timer_second = timer_progress;
         previous_clock_minute = clock_minute;
         previous_clock_valid = clock_valid;
         if (now - last_stack_report >= pdMS_TO_TICKS(60000)) {

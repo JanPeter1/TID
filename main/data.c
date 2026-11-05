@@ -9,6 +9,7 @@
 #include "config.h"
 #include "cJSON.h"
 #include "esp_check.h"
+#include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_random.h"
@@ -26,6 +27,10 @@
 #define REFRESH_INTERVAL_MS (6U * 60U * 60U * 1000U)
 #define PHOTO_MANIFEST_URL "https://familie-riegel.de/tx94/photos/manifest.json"
 #define PHOTO_BASE_URL "https://familie-riegel.de/tx94/photos/"
+#define CALENDAR_TERMS_URL \
+    "https://familie-riegel.de/tx94/content/plugins/occcal/Texelkalender_termine.txt"
+#define CALENDAR_GROUPS_URL \
+    "https://familie-riegel.de/tx94/content/plugins/occcal/Texelkalender_gruppen.txt"
 #define PHOTO_BIT BIT1
 #define CACHE_PARTITION "content_cache"
 #define CACHE_NAMESPACE "content"
@@ -102,16 +107,27 @@ static bool http_get(const char *url, const char *username, const char *password
     }
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (!client) return false;
+    size_t internal_heap_before =
+        heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    size_t internal_largest_before =
+        heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     esp_err_t err = esp_http_client_perform(client);
     int status = esp_http_client_get_status_code(client);
-    bool success = err == ESP_OK && status >= 200 && status < 300;
+    bool success = err == ESP_OK && status >= 200 && status < 300 &&
+                   !response.overflow;
     if (response.overflow) {
         ESP_LOGW(TAG, "Response truncated at %u bytes: %s (HTTP %d)",
                  (unsigned)response.length, url, status);
     }
-    if (!success) {
+    if (!success && !response.overflow) {
         ESP_LOGW(TAG, "GET failed: %s, HTTP %d, URL %s",
                  esp_err_to_name(err), status, url);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Internal heap before HTTPS request: %u bytes free, "
+                     "%u-byte largest block",
+                     (unsigned)internal_heap_before,
+                     (unsigned)internal_largest_before);
+        }
     }
     esp_http_client_cleanup(client);
     return success;
@@ -175,8 +191,26 @@ static bool http_get_photo_file(const char *url, uint32_t expected_size,
         finish_photo_buffer_use();
         return false;
     }
+    const uint32_t internal_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+    size_t internal_free_before = heap_caps_get_free_size(internal_caps);
+    size_t internal_largest_before = heap_caps_get_largest_free_block(internal_caps);
+    esp_err_t monitor_err = heap_caps_monitor_local_minimum_free_size_start();
     esp_err_t err = esp_http_client_perform(client);
     int status = esp_http_client_get_status_code(client);
+    size_t internal_minimum_during = monitor_err == ESP_OK
+        ? heap_caps_get_minimum_free_size(internal_caps) : 0;
+    size_t internal_free_during = heap_caps_get_free_size(internal_caps);
+    size_t internal_largest_during = heap_caps_get_largest_free_block(internal_caps);
+    if (monitor_err == ESP_OK) {
+        esp_err_t stop_err = heap_caps_monitor_local_minimum_free_size_stop();
+        if (stop_err != ESP_OK) {
+            ESP_LOGW(TAG, "Could not stop local heap monitoring: %s",
+                     esp_err_to_name(stop_err));
+        }
+    } else {
+        ESP_LOGW(TAG, "Could not start local heap monitoring: %s",
+                 esp_err_to_name(monitor_err));
+    }
     bool success = err == ESP_OK && status >= 200 && status < 300 &&
                    !response.overflow && response.length == expected_size &&
                    photo_jpeg_buffer[0] == 0xFF && photo_jpeg_buffer[1] == 0xD8;
@@ -186,6 +220,14 @@ static bool http_get_photo_file(const char *url, uint32_t expected_size,
                  response.overflow);
     }
     esp_http_client_cleanup(client);
+    ESP_LOGI(TAG, "Photo TLS heap: JPEG buffer %u bytes, before %u free/%u largest, "
+             "during %u free/%u largest, minimum %u, after cleanup %u free/%u largest",
+             (unsigned)required_capacity,
+             (unsigned)internal_free_before, (unsigned)internal_largest_before,
+             (unsigned)internal_free_during, (unsigned)internal_largest_during,
+             (unsigned)internal_minimum_during,
+             (unsigned)heap_caps_get_free_size(internal_caps),
+             (unsigned)heap_caps_get_largest_free_block(internal_caps));
     if (!success) {
         finish_photo_buffer_use();
         return false;
@@ -504,6 +546,22 @@ static bool parse_event_response(const char *json, const char *today, const char
         }
     }
 
+    for (uint8_t i = 1; i < event_count; i++) {
+        texel_event_t event = events[i];
+        uint8_t insert_at = i;
+        while (insert_at > 0) {
+            texel_event_t *previous = &events[insert_at - 1];
+            int date_order = strcmp(previous->date, event.date);
+            if (date_order < 0 ||
+                (date_order == 0 && strcmp(previous->time, event.time) <= 0)) {
+                break;
+            }
+            events[insert_at] = *previous;
+            insert_at--;
+        }
+        events[insert_at] = event;
+    }
+
     xSemaphoreTake(data_lock, portMAX_DELAY);
     memcpy(current_data.events, events, sizeof(events));
     current_data.event_count = event_count;
@@ -513,6 +571,26 @@ static bool parse_event_response(const char *json, const char *today, const char
     cJSON_Delete(root);
     ESP_LOGI(TAG, "Parsed %u VVV events for today and tomorrow", event_count);
     return true;
+}
+
+static void log_vvv_response(const char *response)
+{
+    size_t length = 0;
+    while (length < EVENT_RESPONSE_LIMIT && response[length]) length++;
+    ESP_LOGI(TAG, "VVV response (%u bytes):", (unsigned)length);
+
+    for (size_t offset = 0; offset < length;) {
+        size_t chunk_length = length - offset;
+        if (chunk_length > 256) chunk_length = 256;
+        while (chunk_length > 0 && offset + chunk_length < length &&
+               ((unsigned char)response[offset + chunk_length] & 0xC0) == 0x80) {
+            chunk_length--;
+        }
+        if (!chunk_length) chunk_length = length - offset;
+        ESP_LOGI(TAG, "VVV response [%u]: %.*s",
+                 (unsigned)offset, (int)chunk_length, response + offset);
+        offset += chunk_length;
+    }
 }
 
 static void fetch_events(void)
@@ -565,8 +643,10 @@ static void fetch_events(void)
         free(body);
         return;
     }
-    if (http_post_json("https://texel-gateway.travelbase.nl/graphql",
-                       body, response, EVENT_RESPONSE_LIMIT)) {
+    bool response_ok = http_post_json("https://texel-gateway.travelbase.nl/graphql",
+                                      body, response, EVENT_RESPONSE_LIMIT);
+    log_vvv_response(response);
+    if (response_ok) {
         if (!parse_event_response(response, today, tomorrow)) {
             ESP_LOGW(TAG, "VVV GraphQL response did not contain event data");
         }
@@ -761,20 +841,159 @@ static void html_to_text(char *html)
     *write = '\0';
 }
 
-static void fetch_page(const char *url, const char *username, const char *password,
-                       char *destination, size_t destination_size)
+static bool calendar_parse_uint(const char **cursor, char separator,
+                                unsigned int *value)
+{
+    if (**cursor == '\0') return false;
+    unsigned int parsed = 0;
+    if (**cursor < '0' || **cursor > '9') return false;
+    while (**cursor >= '0' && **cursor <= '9') {
+        parsed = parsed * 10U + (unsigned int)(**cursor - '0');
+        (*cursor)++;
+    }
+    if (**cursor != separator) return false;
+    (*cursor)++;
+    *value = parsed;
+    return true;
+}
+
+static bool valid_calendar_date(unsigned int year, unsigned int month,
+                               unsigned int day)
+{
+    static const uint8_t month_lengths[] =
+        {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (year < 2000 || year > UINT16_MAX || month < 1 || month > 12 || day < 1) {
+        return false;
+    }
+    unsigned int max_day = month_lengths[month - 1];
+    bool leap_year = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    if (month == 2 && leap_year) max_day++;
+    return day <= max_day;
+}
+
+static bool parse_calendar_terms(const char *text, calendar_entry_t *entries,
+                                 uint16_t *entry_count)
+{
+    *entry_count = 0;
+    const char *cursor = text;
+    while (*cursor) {
+        while (*cursor == ';' || *cursor == '\r' || *cursor == '\n' ||
+               *cursor == ' ' || *cursor == '\t') {
+            cursor++;
+        }
+        if (!*cursor) break;
+
+        unsigned int year, month, day, group_id;
+        if (!calendar_parse_uint(&cursor, '-', &year) ||
+            !calendar_parse_uint(&cursor, '-', &month) ||
+            !calendar_parse_uint(&cursor, '=', &day)) {
+            return false;
+        }
+        const char *group_start = cursor;
+        if (*cursor < '0' || *cursor > '9') return false;
+        group_id = 0;
+        while (*cursor >= '0' && *cursor <= '9') {
+            group_id = group_id * 10U + (unsigned int)(*cursor - '0');
+            cursor++;
+        }
+        if (cursor == group_start || !valid_calendar_date(year, month, day) ||
+            group_id == 0 || group_id >= DATA_CALENDAR_GROUPS ||
+            *entry_count >= DATA_CALENDAR_MAX_ENTRIES) {
+            return false;
+        }
+        entries[*entry_count] = (calendar_entry_t) {
+            .year = (uint16_t)year,
+            .month = (uint8_t)month,
+            .day = (uint8_t)day,
+            .group_id = (uint8_t)group_id,
+        };
+        (*entry_count)++;
+        if (*cursor && *cursor != ';' && *cursor != '\r' && *cursor != '\n' &&
+            *cursor != ' ' && *cursor != '\t') {
+            return false;
+        }
+    }
+    return *entry_count > 0;
+}
+
+static bool parse_calendar_groups(
+    const char *text,
+    char names[DATA_CALENDAR_GROUPS][DATA_CALENDAR_GROUP_NAME_LENGTH])
+{
+    memset(names, 0, DATA_CALENDAR_GROUPS * DATA_CALENDAR_GROUP_NAME_LENGTH);
+    const char *cursor = text;
+    while (*cursor) {
+        while (*cursor == ';' || *cursor == '\r' || *cursor == '\n' ||
+               *cursor == ' ' || *cursor == '\t') {
+            cursor++;
+        }
+        if (!*cursor) break;
+
+        unsigned int group_id;
+        if (!calendar_parse_uint(&cursor, '=', &group_id) ||
+            group_id == 0 || group_id >= DATA_CALENDAR_GROUPS) {
+            return false;
+        }
+        const char *name_start = cursor;
+        while (*cursor && *cursor != ';' && *cursor != '\r' && *cursor != '\n') {
+            cursor++;
+        }
+        size_t name_length = (size_t)(cursor - name_start);
+        while (name_length && (name_start[name_length - 1] == ' ' ||
+                               name_start[name_length - 1] == '\t')) {
+            name_length--;
+        }
+        if (!name_length || name_length >= DATA_CALENDAR_GROUP_NAME_LENGTH) {
+            return false;
+        }
+        memcpy(names[group_id], name_start, name_length);
+    }
+    return true;
+}
+
+static void fetch_calendar(void)
 {
     char *response = calloc(1, RESPONSE_LIMIT);
-    if (!response) return;
-    if (http_get(url, username, password, response, RESPONSE_LIMIT)) {
-        html_to_text(response);
-        xSemaphoreTake(data_lock, portMAX_DELAY);
-        snprintf(destination, destination_size, "%s", response);
-        current_data.calendar_valid = destination[0] != '\0';
-        current_data.from_cache = false;
-        xSemaphoreGive(data_lock);
+    if (!response) {
+        ESP_LOGE(TAG, "Could not allocate calendar response buffer");
+        return;
     }
+
+    calendar_entry_t entries[DATA_CALENDAR_MAX_ENTRIES] = {0};
+    uint16_t entry_count = 0;
+    char group_names[DATA_CALENDAR_GROUPS][DATA_CALENDAR_GROUP_NAME_LENGTH] = {0};
+    bool success = http_get(CALENDAR_TERMS_URL, NULL, NULL, response, RESPONSE_LIMIT) &&
+                   parse_calendar_terms(response, entries, &entry_count);
+    if (!success) {
+        ESP_LOGW(TAG, "Could not parse occupancy calendar terms");
+        free(response);
+        return;
+    }
+
+    memset(response, 0, RESPONSE_LIMIT);
+    success = http_get(CALENDAR_GROUPS_URL, NULL, NULL, response, RESPONSE_LIMIT) &&
+              parse_calendar_groups(response, group_names);
     free(response);
+    if (!success) {
+        ESP_LOGW(TAG, "Could not parse occupancy calendar groups");
+        return;
+    }
+    for (uint16_t i = 0; i < entry_count; i++) {
+        if (!group_names[entries[i].group_id][0]) {
+            ESP_LOGW(TAG, "Occupancy calendar references unknown group %u",
+                     (unsigned)entries[i].group_id);
+            return;
+        }
+    }
+
+    xSemaphoreTake(data_lock, portMAX_DELAY);
+    memcpy(current_data.calendar_entries, entries, sizeof(entries));
+    current_data.calendar_entry_count = entry_count;
+    memcpy(current_data.calendar_group_names, group_names, sizeof(group_names));
+    current_data.calendar_valid = true;
+    current_data.from_cache = false;
+    xSemaphoreGive(data_lock);
+    ESP_LOGI(TAG, "Loaded %u occupancy calendar days", (unsigned)entry_count);
 }
 
 static void mark_photo_error(uint32_t request_serial)
@@ -874,6 +1093,7 @@ static void fetch_random_photo(uint32_t request_serial)
     }
 
     xSemaphoreTake(data_lock, portMAX_DELAY);
+    bool photo_ready = false;
     if (request_serial == photo_request_serial) {
         photo_jpeg_size = downloaded_size;
         current_data.photo_ready = true;
@@ -884,10 +1104,18 @@ static void fetch_random_photo(uint32_t request_serial)
         snprintf(current_data.photo_date, sizeof(current_data.photo_date),
                  "%s", selected_date);
         snprintf(last_photo_path, sizeof(last_photo_path), "%s", selected_path);
-        ESP_LOGI(TAG, "Loaded photo %s (%u bytes)", selected_path,
-                 (unsigned)downloaded_size);
+        photo_ready = true;
     }
     xSemaphoreGive(data_lock);
+    if (photo_ready) {
+        const uint32_t internal_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+        ESP_LOGI(TAG, "Loaded photo %s (%u bytes); retained-photo heap: %u free, "
+                 "%u-byte largest block; another max-size JPEG needs %u bytes",
+                 selected_path, (unsigned)downloaded_size,
+                 (unsigned)heap_caps_get_free_size(internal_caps),
+                 (unsigned)heap_caps_get_largest_free_block(internal_caps),
+                 (unsigned)(DATA_PHOTO_MAX_BYTES + 1U));
+    }
 }
 
 static void fetch_all(void)
@@ -909,22 +1137,8 @@ static void fetch_all(void)
     if (http_get(weather_url, NULL, NULL, response, RESPONSE_LIMIT)) parse_weather(response);
     if (http_get(marine_url, NULL, NULL, response, RESPONSE_LIMIT)) parse_tides(response);
     free(response);
-    response = NULL;
     fetch_events();
-
-    device_config_t config;
-    if (config_load(&config) == ESP_OK) {
-        char calendar[DATA_TEXT_LENGTH];
-        if (config.calendar_user[0] && config.calendar_password[0]) {
-            fetch_page("https://familie-riegel.de/tx94/?Texel-Kalender",
-                       config.calendar_user, config.calendar_password,
-                       calendar, sizeof(calendar));
-        } else {
-            ESP_LOGI(TAG, "Calendar credentials are not configured");
-        }
-        config_clear(&config);
-    }
-    free(response);
+    fetch_calendar();
     ESP_LOGI(TAG, "Content refresh finished");
 }
 
@@ -943,6 +1157,11 @@ static void load_cache(void)
             current_data.event_count = 0;
             current_data.events_valid = false;
             ESP_LOGW(TAG, "Ignoring invalid cached event count");
+        }
+        if (current_data.calendar_entry_count > DATA_CALENDAR_MAX_ENTRIES) {
+            current_data.calendar_entry_count = 0;
+            current_data.calendar_valid = false;
+            ESP_LOGW(TAG, "Ignoring invalid cached calendar entry count");
         }
         current_data.from_cache = true;
         current_data.photo_ready = false;
@@ -974,6 +1193,7 @@ static void refresh_task(void *unused)
     bool refresh_pending = true;
     bool photo_pending = false;
     bool waiting_for_ip_logged = false;
+    bool waiting_for_time_logged = false;
     while (true) {
         EventBits_t bits = xEventGroupWaitBits(refresh_events, REFRESH_BIT | PHOTO_BIT,
                                                 pdTRUE, pdFALSE, pdMS_TO_TICKS(1000));
@@ -994,6 +1214,15 @@ static void refresh_task(void *unused)
         }
 
         waiting_for_ip_logged = false;
+        if (!config_ntp_synced()) {
+            if (!waiting_for_time_logged) {
+                ESP_LOGI(TAG, "Waiting for NTP time synchronization before HTTPS requests");
+                waiting_for_time_logged = true;
+            }
+            continue;
+        }
+
+        waiting_for_time_logged = false;
         if (refresh_pending) {
             fetch_all();
             xSemaphoreTake(data_lock, portMAX_DELAY);

@@ -30,6 +30,7 @@ static const char *TAG = "display";
 static spi_device_handle_t tft;
 static lv_display_t *lv_display;
 static lv_obj_t *screen;
+static lv_obj_t *page_timer_arc;
 static lv_indev_t *touch_indev;
 static int touch_x;
 static int touch_y;
@@ -337,6 +338,12 @@ void display_fill_rect(int x, int y, int width, int height, uint16_t color)
 
 void display_fill_round_rect(int x, int y, int width, int height, uint16_t color)
 {
+    display_fill_round_rect_radius(x, y, width, height, height / 2, color);
+}
+
+void display_fill_round_rect_radius(int x, int y, int width, int height,
+                                    int radius, uint16_t color)
+{
     if (x < 0) { width += x; x = 0; }
     if (y < 0) { height += y; y = 0; }
     if (x + width > DISPLAY_WIDTH) width = DISPLAY_WIDTH - x;
@@ -349,7 +356,7 @@ void display_fill_round_rect(int x, int y, int width, int height, uint16_t color
     lv_obj_set_size(object, width, height);
     lv_obj_set_style_bg_color(object, color_from_rgb565(color), 0);
     lv_obj_set_style_bg_opa(object, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(object, height / 2, 0);
+    lv_obj_set_style_radius(object, radius, 0);
 }
 
 void display_clear(uint16_t color)
@@ -357,6 +364,7 @@ void display_clear(uint16_t color)
     if (!screen) return;
     lv_obj_clean(screen);
     line_count = 0;
+    page_timer_arc = NULL;
     lv_obj_set_style_bg_color(screen, color_from_rgb565(color), 0);
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
 }
@@ -422,6 +430,146 @@ void display_fill_circle(int center_x, int center_y, int radius, uint16_t color)
     lv_obj_set_style_bg_opa(object, LV_OPA_COVER, 0);
 }
 
+void display_set_page_timer(uint8_t elapsed_seconds)
+{
+    if (!screen) return;
+    if (!page_timer_arc) {
+        page_timer_arc = lv_arc_create(screen);
+        if (!page_timer_arc) {
+            ESP_LOGE(TAG, "LVGL could not allocate the page timer arc");
+            return;
+        }
+        lv_obj_remove_style_all(page_timer_arc);
+        lv_obj_set_size(page_timer_arc, 14, 14);
+        lv_obj_set_pos(page_timer_arc, 207, 225);
+        lv_obj_set_clickable(page_timer_arc, false);
+        lv_obj_set_scrollable(page_timer_arc, false);
+        lv_arc_set_rotation(page_timer_arc, 270);
+        lv_arc_set_bg_angles(page_timer_arc, 0, 360);
+        lv_obj_set_style_arc_color(page_timer_arc, color_from_rgb565(0xA514),
+                                   LV_PART_MAIN);
+        lv_obj_set_style_arc_opa(page_timer_arc, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_arc_width(page_timer_arc, 2, LV_PART_MAIN);
+        lv_obj_set_style_arc_color(page_timer_arc, color_from_rgb565(0xFD20),
+                                   LV_PART_INDICATOR);
+        lv_obj_set_style_arc_opa(page_timer_arc, LV_OPA_COVER, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_width(page_timer_arc, 2, LV_PART_INDICATOR);
+        lv_obj_remove_style(page_timer_arc, NULL, LV_PART_KNOB);
+    }
+
+    if (elapsed_seconds > 60) elapsed_seconds = 60;
+    lv_arc_set_angles(page_timer_arc, 0, (int32_t)elapsed_seconds * 6);
+}
+
+static void tide_chart_draw_event(lv_event_t *event)
+{
+    lv_draw_task_t *task = lv_event_get_draw_task(event);
+    if (!task || lv_draw_task_get_type(task) != LV_DRAW_TASK_TYPE_LINE) return;
+
+    lv_draw_dsc_base_t *base = lv_draw_task_get_draw_dsc(task);
+    if (!base || base->part != LV_PART_ITEMS) return;
+
+    lv_draw_line_dsc_t *line = lv_draw_task_get_line_dsc(task);
+    if (!line || !line->points || line->point_cnt < 2) return;
+
+    lv_area_t chart_area;
+    lv_obj_get_coords(lv_event_get_target_obj(event), &chart_area);
+
+    lv_draw_triangle_dsc_t triangle;
+    lv_draw_triangle_dsc_init(&triangle);
+    triangle.color = color_from_rgb565(0x7DFF);
+    triangle.opa = LV_OPA_COVER;
+
+    lv_draw_rect_dsc_t rectangle;
+    lv_draw_rect_dsc_init(&rectangle);
+    rectangle.bg_color = color_from_rgb565(0x7DFF);
+    rectangle.bg_opa = LV_OPA_COVER;
+    rectangle.border_width = 0;
+    rectangle.radius = 0;
+
+    for (uint32_t i = 0; i + 1 < line->point_cnt; i++) {
+        lv_point_precise_t p1 = line->points[i];
+        lv_point_precise_t p2 = line->points[i + 1];
+        if (p1.x == LV_DRAW_LINE_POINT_NONE || p1.y == LV_DRAW_LINE_POINT_NONE ||
+            p2.x == LV_DRAW_LINE_POINT_NONE || p2.y == LV_DRAW_LINE_POINT_NONE) {
+            continue;
+        }
+
+        int32_t lower_y = LV_MAX(p1.y, p2.y);
+        triangle.p[0] = p1;
+        triangle.p[1] = p2;
+        triangle.p[2].x = p1.y < p2.y ? p1.x : p2.x;
+        triangle.p[2].y = lower_y;
+        lv_draw_triangle(base->layer, &triangle);
+
+        if (p1.x < p2.x && lower_y < chart_area.y2) {
+            lv_area_t fill_area = {
+                .x1 = p1.x,
+                .y1 = lower_y,
+                .x2 = p2.x - 1,
+                .y2 = chart_area.y2,
+            };
+            lv_draw_rect(base->layer, &rectangle, &fill_area);
+        }
+    }
+
+    lv_draw_line(base->layer, line);
+}
+
+esp_err_t display_draw_tide_chart(const int32_t *values, size_t count,
+                                  int32_t minimum, int32_t maximum)
+{
+    if (!screen || !values || count < 2 || maximum < minimum) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    lv_obj_t *chart = lv_chart_create(screen);
+    if (!chart) {
+        ESP_LOGE(TAG, "LVGL could not allocate the tide chart");
+        return ESP_ERR_NO_MEM;
+    }
+
+    lv_obj_remove_style_all(chart);
+    lv_obj_set_pos(chart, 42, 119);
+    lv_obj_set_size(chart, 236, 50);
+    lv_obj_set_clickable(chart, false);
+    lv_obj_set_scrollable(chart, false);
+    lv_obj_set_style_bg_opa(chart, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(chart, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(chart, 0, LV_PART_MAIN);
+    lv_obj_set_style_line_width(chart, 2, LV_PART_ITEMS);
+    lv_obj_set_style_line_rounded(chart, true, LV_PART_ITEMS);
+    lv_obj_set_style_width(chart, 0, LV_PART_INDICATOR);
+    lv_obj_set_style_height(chart, 0, LV_PART_INDICATOR);
+
+    lv_chart_set_type(chart, LV_CHART_TYPE_LINE);
+    lv_chart_set_point_count(chart, (uint32_t)count);
+    lv_chart_set_div_line_count(chart, 0, 0);
+    if (maximum == minimum) {
+        minimum--;
+        maximum++;
+    }
+    lv_chart_set_axis_range(chart, LV_CHART_AXIS_PRIMARY_Y, minimum, maximum);
+
+    lv_chart_series_t *series =
+        lv_chart_add_series(chart, color_from_rgb565(0xFD20),
+                            LV_CHART_AXIS_PRIMARY_Y);
+    if (!series) {
+        ESP_LOGE(TAG, "LVGL could not allocate the tide chart data");
+        lv_obj_delete(chart);
+        return ESP_ERR_NO_MEM;
+    }
+    for (size_t i = 0; i < count; i++) {
+        lv_chart_set_next_value(chart, series, values[i]);
+    }
+
+    lv_obj_add_event_cb(chart, tide_chart_draw_event,
+                        LV_EVENT_DRAW_TASK_ADDED, NULL);
+    lv_obj_set_send_draw_task_events(chart, true);
+    lv_chart_refresh(chart);
+    return ESP_OK;
+}
+
 esp_err_t display_draw_qr_code(int x, int y, int size, const char *data)
 {
     if (!screen || !data || size <= 0 || x < 0 || y < 0 ||
@@ -481,8 +629,9 @@ static const lv_font_t *font_for_scale(uint8_t scale)
     return scale == 2 ? &lv_font_german_24 : &lv_font_german_12;
 }
 
-static void display_label(int x, int y, const char *text, uint16_t foreground,
-                          uint16_t background, uint8_t scale, bool transparent)
+static void display_label(int x, int y, int width, int height, const char *text,
+                          uint16_t foreground, uint16_t background,
+                          uint8_t scale, bool transparent)
 {
     if (!screen || !text || !text[0] || !scale || scale > 2) return;
     lv_obj_t *label = lv_label_create(screen);
@@ -493,6 +642,10 @@ static void display_label(int x, int y, const char *text, uint16_t foreground,
     lv_label_set_text(label, text);
     lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
     lv_obj_set_pos(label, x, y);
+    if (width > 0 && height > 0) {
+        lv_obj_set_size(label, width, height);
+        lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+    }
     lv_obj_set_style_text_font(label, font_for_scale(scale), 0);
     lv_obj_set_style_text_color(label, color_from_rgb565(foreground), 0);
     lv_obj_set_style_bg_color(label, color_from_rgb565(background), 0);
@@ -504,12 +657,18 @@ static void display_label(int x, int y, const char *text, uint16_t foreground,
 void display_text_bg(int x, int y, const char *text, uint16_t foreground,
                      uint16_t background, uint8_t scale)
 {
-    display_label(x, y, text, foreground, background, scale, false);
+    display_label(x, y, 0, 0, text, foreground, background, scale, false);
 }
 
 void display_text(int x, int y, const char *text, uint16_t color, uint8_t scale)
 {
-    display_label(x, y, text, color, 0x0841, scale, true);
+    display_label(x, y, 0, 0, text, color, 0x0841, scale, true);
+}
+
+void display_text_box(int x, int y, int width, int height, const char *text,
+                      uint16_t color, uint8_t scale)
+{
+    display_label(x, y, width, height, text, color, 0x0841, scale, true);
 }
 
 void display_draw_frame(void)

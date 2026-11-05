@@ -6,7 +6,6 @@
 
 #include "esp_err.h"
 
-#define DATA_TEXT_LENGTH 1200
 #define DATA_DAYS 6
 #define TIDE_SAMPLES 12
 #define DATA_EVENT_COUNT 12
@@ -18,6 +17,16 @@
 #define DATA_PHOTO_DATE_LENGTH 11
 #define DATA_PHOTO_PATH_LENGTH 64
 #define DATA_PHOTO_MAX_BYTES (12U * 1024U)
+#define DATA_CALENDAR_MAX_ENTRIES 512
+#define DATA_CALENDAR_GROUPS 16
+#define DATA_CALENDAR_GROUP_NAME_LENGTH 32
+
+typedef struct {
+    uint16_t year;
+    uint8_t month;
+    uint8_t day;
+    uint8_t group_id;
+} calendar_entry_t;
 
 typedef struct {
     char date[11];
@@ -62,9 +71,11 @@ typedef struct {
     float tide_height_m;
     float tide_samples[TIDE_SAMPLES];
     weather_day_t days[DATA_DAYS];
+    uint16_t calendar_entry_count;
+    calendar_entry_t calendar_entries[DATA_CALENDAR_MAX_ENTRIES];
+    char calendar_group_names[DATA_CALENDAR_GROUPS][DATA_CALENDAR_GROUP_NAME_LENGTH];
     uint8_t event_count;
     texel_event_t events[DATA_EVENT_COUNT];
-    char calendar[DATA_TEXT_LENGTH];
 } app_data_t;
 
 esp_err_t data_init(void);

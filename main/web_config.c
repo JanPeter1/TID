@@ -42,8 +42,6 @@ static esp_err_t root_get(httpd_req_t *request)
         httpd_resp_sendstr_chunk(request, section);
     }
     httpd_resp_sendstr_chunk(request,
-        "<h2>Kalender-Zugang</h2><label>Benutzername</label><input name='caluser' maxlength='64'>"
-        "<label>Passwort</label><input name='calpass' type='password' maxlength='128'>"
         "<button type='submit'>Speichern und WLAN neu verbinden</button></form></html>");
     return httpd_resp_sendstr_chunk(request, NULL);
 }
@@ -129,20 +127,6 @@ static esp_err_t root_post(httpd_req_t *request)
             snprintf(key, sizeof(key), "pass%d", i);
             read_field(body, key, config.wifi_password[i], sizeof(config.wifi_password[i]));
         }
-    }
-    char calendar_user[CONFIG_CALENDAR_USER_SIZE];
-    char calendar_password[CONFIG_CALENDAR_PASSWORD_SIZE];
-    read_field(body, "caluser", calendar_user, sizeof(calendar_user));
-    if (calendar_user[0]) {
-        size_t length = strlen(calendar_user) + 1;
-        memset(config.calendar_user, 0, sizeof(config.calendar_user));
-        memcpy(config.calendar_user, calendar_user, length);
-    }
-    read_field(body, "calpass", calendar_password, sizeof(calendar_password));
-    if (calendar_password[0]) {
-        size_t length = strlen(calendar_password) + 1;
-        memset(config.calendar_password, 0, sizeof(config.calendar_password));
-        memcpy(config.calendar_password, calendar_password, length);
     }
     free(body);
 
