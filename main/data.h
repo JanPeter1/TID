@@ -36,7 +36,7 @@ typedef struct {
 
 typedef struct {
     char date[11];
-    char times[DATA_EVENT_TIMES_PER_EVENT][DATA_EVENT_TIME_LENGTH];
+    uint16_t times[DATA_EVENT_TIMES_PER_EVENT];
     char title[DATA_EVENT_TITLE_LENGTH];
     char place[DATA_EVENT_PLACE_LENGTH];
     char description[DATA_EVENT_DESCRIPTION_LENGTH];

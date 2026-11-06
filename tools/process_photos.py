@@ -99,6 +99,15 @@ def creation_date(source_path):
     return datetime.fromtimestamp(timestamp).date().isoformat()
 
 
+def manifest_date(value):
+    for date_format in ("%Y-%m-%d", "%d.%m.%Y"):
+        try:
+            return datetime.strptime(value, date_format).strftime("%d.%m.%Y")
+        except ValueError:
+            continue
+    raise ValueError(f"Invalid photo date in manifest metadata: {value}")
+
+
 def fallback_coordinates(coordinates):
     latitude, longitude = coordinates
     return f"GPS {latitude:.4f}, {longitude:.4f}"
@@ -260,7 +269,7 @@ def process(source_root, output_root, max_bytes, user_agent, profile_names):
 
             records.append({
                 "path": name,
-                "date": metadata["date"],
+                "date": manifest_date(metadata["date"]),
                 "title": metadata["title"],
                 "size": output_path.stat().st_size,
             })

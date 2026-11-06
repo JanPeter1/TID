@@ -456,7 +456,6 @@ static void draw_weather(const app_data_t *data, uint8_t subpage)
 {
     if (subpage == 2) {
         display_text(34, 40, "GEZEITEN AUF TEXEL", COLOR_ORANGE, 1);
-        display_text(34, 55, "OPEN-METEO MARINE-MODELL", COLOR_MUTED, 1);
         if (!data->tide_valid) {
             draw_wrapped_text("Gezeitendaten werden geladen oder sind nicht erreichbar.",
                               34, 80, 5, COLOR_WHITE, 0);
@@ -496,7 +495,6 @@ static void draw_weather(const app_data_t *data, uint8_t subpage)
                  COLOR_ORANGE, 1);
     display_text(252, 40, data->updated_at[11] ? data->updated_at + 11 : "--:--",
                  COLOR_MUTED, 1);
-    display_text(34, 54, "OPEN-METEO.COM", COLOR_MUTED, 1);
     if (!data->weather_valid) {
         draw_wrapped_text("Wetterdaten werden geladen oder sind nicht erreichbar.",
                           34, 76, 5, COLOR_WHITE, 0);
@@ -871,9 +869,9 @@ static bool draw_splash_screen(const app_data_t *data)
     const char *name = current_calendar_booking_name(data);
     if (name) {
         char welcome[DATA_CALENDAR_GROUP_NAME_LENGTH + 32];
-        snprintf(welcome, sizeof(welcome), "Willkommen auf Texel, %s", name);
-        display_fill_rect_opa(4, 178, 312, 44, 0x0000, 190);
-        display_text_box(8, 189, 304, 22, welcome, COLOR_WHITE, 1);
+        snprintf(welcome, sizeof(welcome), "Willkommen auf Texel, %s!\n<start>", name);
+        display_fill_rect_opa(10, 178, 300, 52, 0x0000, 190);
+        display_text_box(10, 189, 300, 42, welcome, COLOR_WHITE, 1);
     }
     return true;
 }
@@ -932,6 +930,10 @@ static void draw_page(const app_data_t *data, uint8_t timer_progress,
             if (time_count > DATA_EVENT_TIMES_PER_EVENT) {
                 time_count = DATA_EVENT_TIMES_PER_EVENT;
             }
+            /*
+            ESP_LOGI("ui", "Event %s has %u times, displaying %u",
+                     event->title, event->time_count, time_count);
+            */
             if (!time_count) {
                 snprintf(event_times, sizeof(event_times), "%s", "ZEIT N.N.");
             } else {
@@ -939,8 +941,9 @@ static void draw_page(const app_data_t *data, uint8_t timer_progress,
                 for (uint8_t i = 0; i < time_count; i++) {
                     int written = snprintf(event_times + used,
                                            sizeof(event_times) - used,
-                                           "%s%.5s", i ? ", " : "",
-                                           event->times[i]);
+                                           "%s%02u:%02u", i ? ", " : "",
+                                           (unsigned)(event->times[i] / 60U),
+                                           (unsigned)(event->times[i] % 60U));
                     if (written < 0 || (size_t)written >=
                         sizeof(event_times) - used) {
                         break;
