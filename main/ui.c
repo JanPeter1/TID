@@ -927,10 +927,36 @@ static void draw_page(const app_data_t *data, uint8_t timer_progress,
             const texel_event_t *event = &data->events[active_subpage[active_page]];
             display_text(34, 40, event->day_offset ? "MORGEN AUF TEXEL" : "HEUTE AUF TEXEL",
                          COLOR_ORANGE, 1);
-            char event_date[32];
-            snprintf(event_date, sizeof(event_date), "%.2s.%.2s.%.4s  %s",
-                     event->date + 8, event->date + 5, event->date,
-                     event->time[0] ? event->time : "ZEIT N.N.");
+            char event_times[DATA_EVENT_TIMES_TEXT_LENGTH] = {0};
+            uint8_t time_count = event->time_count;
+            if (time_count > DATA_EVENT_TIMES_PER_EVENT) {
+                time_count = DATA_EVENT_TIMES_PER_EVENT;
+            }
+            if (!time_count) {
+                snprintf(event_times, sizeof(event_times), "%s", "ZEIT N.N.");
+            } else {
+                size_t used = 0;
+                for (uint8_t i = 0; i < time_count; i++) {
+                    int written = snprintf(event_times + used,
+                                           sizeof(event_times) - used,
+                                           "%s%.5s", i ? ", " : "",
+                                           event->times[i]);
+                    if (written < 0 || (size_t)written >=
+                        sizeof(event_times) - used) {
+                        break;
+                    }
+                    used += (size_t)written;
+                }
+            }
+            char event_date[DATA_EVENT_TIMES_TEXT_LENGTH + 12];
+            if (time_count > 1) {
+                snprintf(event_date, sizeof(event_date), "%.2s.%.2s  %s",
+                         event->date + 8, event->date + 5, event_times);
+            } else {
+                snprintf(event_date, sizeof(event_date), "%.2s.%.2s.%.4s  %s",
+                         event->date + 8, event->date + 5, event->date,
+                         event_times);
+            }
             display_text(34, 56, event_date, COLOR_MUTED, 1);
             draw_wrapped_text(event->title, 34, 76, 4, COLOR_WHITE, 0);
             if (event->place[0]) {
@@ -1180,7 +1206,7 @@ static void ui_task(void *unused)
             draw_page(snapshot, timer_progress, splash_visible);
             if (photo_page_changed) data_request_photo();
             if (leaving_photo_page) data_release_photo();
-            if (snapshot->from_cache) {
+            if (snapshot->from_cache && !splash_visible) {
                 display_text_bg(146, 225, "CACHE", COLOR_ORANGE, COLOR_PANEL, 1);
             }
             memcpy(previous, snapshot, sizeof(*snapshot));
@@ -1193,7 +1219,7 @@ static void ui_task(void *unused)
             previous_splash_visible = splash_visible;
         } else if (clock_changed) {
             draw_page(snapshot, timer_progress, splash_visible);
-            if (snapshot->from_cache) {
+            if (snapshot->from_cache && !splash_visible) {
                 display_text_bg(146, 225, "CACHE", COLOR_ORANGE, COLOR_PANEL, 1);
             }
             previous_splash_visible = splash_visible;

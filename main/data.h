@@ -14,6 +14,11 @@
 #define DATA_EVENT_PLACE_LENGTH 48
 #define DATA_EVENT_DESCRIPTION_LENGTH 120
 #define DATA_EVENT_URL_LENGTH 128
+#define DATA_EVENT_TIMES_PER_EVENT 4
+#define DATA_EVENT_TIME_LENGTH 6
+#define DATA_EVENT_TIMES_TEXT_LENGTH \
+    (DATA_EVENT_TIMES_PER_EVENT * (DATA_EVENT_TIME_LENGTH - 1) + \
+     (DATA_EVENT_TIMES_PER_EVENT - 1) * 2 + 1)
 #define DATA_PHOTO_TITLE_LENGTH 64
 #define DATA_PHOTO_DATE_LENGTH 11
 #define DATA_PHOTO_PATH_LENGTH 64
@@ -31,12 +36,13 @@ typedef struct {
 
 typedef struct {
     char date[11];
-    char time[6];
+    char times[DATA_EVENT_TIMES_PER_EVENT][DATA_EVENT_TIME_LENGTH];
     char title[DATA_EVENT_TITLE_LENGTH];
     char place[DATA_EVENT_PLACE_LENGTH];
     char description[DATA_EVENT_DESCRIPTION_LENGTH];
     char url[DATA_EVENT_URL_LENGTH];
     uint8_t day_offset;
+    uint8_t time_count;
 } texel_event_t;
 
 typedef struct {

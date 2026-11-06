@@ -20,7 +20,7 @@ Bungalowpark Slufterhoek
 # Heizung
 @url https://familie-riegel.de/tx94/?Ankunft
 Die Anzeige zeigt die aktuelle Temperatur.
-- Wunschtemperatur am äußeren Ring einstellen und durch drücken übernehmen.
+- Wunschtemperatur am äußeren Ring einstellen.
 - Heizkörper selbst bitte nicht verstellen.
 
 ---
@@ -100,3 +100,9 @@ Bitte prüfen und bei Bedarf auffüllen:
 # Schlafsofa
 @url https://familie-riegel.de/tx94/?Anleitungen
 Die Anleitung für das Schlafsofa ist als PDF auf der Haus-Infoseite verfügbar.
+
+---
+# Gartenhaus
+@url https://familie-riegel.de/tx94/
+Der Schlüssel für das Gartenhaus hängt in dem Zimmer mit der Treppe an der Wand.
+Im Gartenhaus befinden sich die Fahrräder, Gartenmöbel und Werkzeuge.

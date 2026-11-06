@@ -247,50 +247,72 @@ static bool http_get_photo_file(const char *url, uint32_t expected_size,
 static bool http_post_json(const char *url, const char *body,
                            char *output, size_t output_size)
 {
-    response_buffer_t response = {
-        .data = output,
-        .capacity = output_size,
-    };
-    output[0] = '\0';
     esp_http_client_config_t config = {
         .url = url,
         .event_handler = response_event,
-        .user_data = &response,
+        .user_data = NULL,
         .timeout_ms = 15000,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .keep_alive_enable = true,
         .buffer_size = 1024,
         .buffer_size_tx = 1024,
     };
-    esp_http_client_handle_t client = esp_http_client_init(&config);
-    if (!client) return false;
+    for (unsigned attempt = 0; attempt < 2; attempt++) {
+        response_buffer_t response = {
+            .data = output,
+            .capacity = output_size,
+        };
+        config.user_data = &response;
+        output[0] = '\0';
 
-    esp_err_t err = esp_http_client_set_method(client, HTTP_METHOD_POST);
-    if (err == ESP_OK) err = esp_http_client_set_header(client, "Content-Type", "application/json");
-    if (err == ESP_OK) err = esp_http_client_set_header(client, "x-site-language", "de");
-    if (err == ESP_OK) err = esp_http_client_set_header(client, "Origin", "https://www.texel.net");
-    if (err == ESP_OK) {
-        err = esp_http_client_set_header(client, "Referer",
-                                         "https://www.texel.net/de/veranstaltungsuebersicht/");
-    }
-    if (err == ESP_OK) err = esp_http_client_set_post_field(client, body, strlen(body));
-    if (err == ESP_OK) err = esp_http_client_perform(client);
-    int status = esp_http_client_get_status_code(client);
-    bool success = err == ESP_OK && status >= 200 && status < 300;
-    if (!success) {
-        ESP_LOGW(TAG, "POST failed: %s, HTTP %d, URL %s",
-                 esp_err_to_name(err), status, url);
-        if (response.length) {
-            ESP_LOGW(TAG, "POST response body: %.*s",
-                     (int)(response.length < 240 ? response.length : 240), output);
+        esp_http_client_handle_t client = esp_http_client_init(&config);
+        if (!client) {
+            ESP_LOGE(TAG, "Could not initialize POST client for %s", url);
+            return false;
         }
+
+        esp_err_t err = esp_http_client_set_method(client, HTTP_METHOD_POST);
+        if (err == ESP_OK) {
+            err = esp_http_client_set_header(client, "Content-Type", "application/json");
+        }
+        if (err == ESP_OK) {
+            err = esp_http_client_set_header(client, "x-site-language", "de");
+        }
+        if (err == ESP_OK) {
+            err = esp_http_client_set_header(client, "Origin", "https://www.texel.net");
+        }
+        if (err == ESP_OK) {
+            err = esp_http_client_set_header(client, "Referer",
+                                             "https://www.texel.net/de/veranstaltungsuebersicht/");
+        }
+        if (err == ESP_OK) {
+            err = esp_http_client_set_post_field(client, body, strlen(body));
+        }
+        if (err == ESP_OK) err = esp_http_client_perform(client);
+        int status = esp_http_client_get_status_code(client);
+        bool success = err == ESP_OK && status >= 200 && status < 300;
+        if (!success && attempt == 0 && err == ESP_ERR_HTTP_FETCH_HEADER) {
+            ESP_LOGW(TAG, "POST connection closed before HTTP headers; retrying once");
+            esp_http_client_cleanup(client);
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
+        if (!success) {
+            ESP_LOGW(TAG, "POST failed: %s, HTTP %d, URL %s",
+                     esp_err_to_name(err), status, url);
+            if (response.length) {
+                ESP_LOGW(TAG, "POST response body: %.*s",
+                         (int)(response.length < 240 ? response.length : 240), output);
+            }
+        }
+        if (response.overflow) {
+            ESP_LOGW(TAG, "POST response truncated at %u bytes: %s",
+                     (unsigned)response.length, url);
+        }
+        esp_http_client_cleanup(client);
+        return success && !response.overflow;
     }
-    if (response.overflow) {
-        ESP_LOGW(TAG, "POST response truncated at %u bytes: %s",
-                 (unsigned)response.length, url);
-    }
-    esp_http_client_cleanup(client);
-    return success && !response.overflow;
+    return false;
 }
 
 static cJSON *object_item(cJSON *object, const char *key)
@@ -502,6 +524,15 @@ static void copy_event_field(char *destination, size_t size, const char *source)
     html_to_text(destination);
 }
 
+typedef struct {
+    char date[11];
+    char time[6];
+    const char *title;
+    const char *place;
+    const char *slug;
+    uint8_t day_offset;
+} raw_texel_event_t;
+
 static bool parse_event_response(const char *json, const char *today, const char *tomorrow)
 {
     cJSON *root = cJSON_Parse(json);
@@ -513,14 +544,21 @@ static bool parse_event_response(const char *json, const char *today, const char
         return false;
     }
 
+    const size_t raw_event_capacity =
+        (size_t)DATA_EVENT_COUNT * DATA_EVENT_TIMES_PER_EVENT;
+    raw_texel_event_t *raw_events =
+        calloc(raw_event_capacity, sizeof(*raw_events));
     texel_event_t *events = calloc(DATA_EVENT_COUNT, sizeof(*events));
-    if (!events) {
+    if (!raw_events || !events) {
         ESP_LOGE(TAG, "Could not allocate VVV event array");
+        free(raw_events);
+        free(events);
         cJSON_Delete(root);
         return false;
     }
-    uint8_t event_count = 0;
-    for (cJSON *hit = hits->child; hit && event_count < DATA_EVENT_COUNT; hit = hit->next) {
+    size_t raw_event_count = 0;
+    for (cJSON *hit = hits->child;
+         hit && raw_event_count < raw_event_capacity; hit = hit->next) {
         const char *title = json_string(hit, "name");
         const char *slug = json_string(hit, "slug");
         const char *place = json_string(hit, "place");
@@ -528,7 +566,7 @@ static bool parse_event_response(const char *json, const char *today, const char
         if (!title || !slug || !cJSON_IsArray(timeslots)) continue;
 
         for (cJSON *slot = timeslots->child;
-             slot && event_count < DATA_EVENT_COUNT; slot = slot->next) {
+             slot && raw_event_count < raw_event_capacity; slot = slot->next) {
             const char *date = json_string(slot, "startDateTime");
             if (!date || strlen(date) < 16) continue;
             uint8_t day_offset;
@@ -536,54 +574,99 @@ static bool parse_event_response(const char *json, const char *today, const char
             else if (strncmp(date, tomorrow, 10) == 0) day_offset = 1;
             else continue;
 
-            texel_event_t event = {0};
+            raw_texel_event_t event = {0};
             snprintf(event.date, sizeof(event.date), "%.10s", date);
             snprintf(event.time, sizeof(event.time), "%.5s", date + 11);
-            copy_event_field(event.title, sizeof(event.title), title);
-            copy_event_field(event.place, sizeof(event.place), place);
-            snprintf(event.url, sizeof(event.url),
-                     "https://www.texel.net/de/aktivitat/%s/", slug);
+            event.title = title;
+            event.place = place;
+            event.slug = slug;
             event.day_offset = day_offset;
 
             bool duplicate = false;
-            for (uint8_t i = 0; i < event_count; i++) {
-                if (strcmp(events[i].date, event.date) == 0 &&
-                    strcmp(events[i].time, event.time) == 0 &&
-                    strcmp(events[i].title, event.title) == 0) {
+            for (size_t i = 0; i < raw_event_count; i++) {
+                if (strcmp(raw_events[i].date, event.date) == 0 &&
+                    strcmp(raw_events[i].time, event.time) == 0 &&
+                    strcmp(raw_events[i].title, event.title) == 0 &&
+                    strcmp(raw_events[i].place ? raw_events[i].place : "",
+                           event.place ? event.place : "") == 0 &&
+                    strcmp(raw_events[i].slug, event.slug) == 0) {
                     duplicate = true;
                     break;
                 }
             }
-            if (!duplicate) events[event_count++] = event;
+            if (!duplicate) raw_events[raw_event_count++] = event;
         }
     }
 
-    for (uint8_t i = 1; i < event_count; i++) {
-        texel_event_t event = events[i];
-        uint8_t insert_at = i;
+    for (size_t i = 1; i < raw_event_count; i++) {
+        raw_texel_event_t event = raw_events[i];
+        size_t insert_at = i;
         while (insert_at > 0) {
-            texel_event_t *previous = &events[insert_at - 1];
+            raw_texel_event_t *previous = &raw_events[insert_at - 1];
             int date_order = strcmp(previous->date, event.date);
             if (date_order < 0 ||
-                (date_order == 0 && strcmp(previous->time, event.time) <= 0)) {
+                (date_order == 0 &&
+                 strcmp(previous->time, event.time) <= 0)) {
                 break;
             }
-            events[insert_at] = *previous;
+            raw_events[insert_at] = *previous;
             insert_at--;
         }
-        events[insert_at] = event;
+        raw_events[insert_at] = event;
+    }
+
+    size_t event_count = 0;
+    uint8_t grouped_time_count = 0;
+    const char *group_title = NULL;
+    const char *group_place = NULL;
+    const char *group_slug = NULL;
+    for (size_t i = 0; i < raw_event_count; i++) {
+        const raw_texel_event_t *event = &raw_events[i];
+        texel_event_t *previous = event_count ? &events[event_count - 1] : NULL;
+        bool same_event = previous &&
+            strcmp(previous->date, event->date) == 0 &&
+            strcmp(group_title, event->title) == 0 &&
+            strcmp(group_place ? group_place : "",
+                   event->place ? event->place : "") == 0 &&
+            strcmp(group_slug, event->slug) == 0;
+        if (same_event && grouped_time_count < DATA_EVENT_TIMES_PER_EVENT) {
+            snprintf(previous->times[grouped_time_count],
+                     sizeof(previous->times[grouped_time_count]), "%.5s",
+                     event->time);
+            grouped_time_count++;
+            previous->time_count = grouped_time_count;
+        } else if (event_count < (size_t)DATA_EVENT_COUNT) {
+            texel_event_t *group = &events[event_count++];
+            snprintf(group->date, sizeof(group->date), "%s", event->date);
+            snprintf(group->times[0], sizeof(group->times[0]), "%.5s",
+                     event->time);
+            copy_event_field(group->title, sizeof(group->title), event->title);
+            copy_event_field(group->place, sizeof(group->place), event->place);
+            snprintf(group->url, sizeof(group->url),
+                     "https://www.texel.net/de/aktivitat/%s/", event->slug);
+            group->day_offset = event->day_offset;
+            group->time_count = 1;
+            grouped_time_count = 1;
+            group_title = event->title;
+            group_place = event->place;
+            group_slug = event->slug;
+        } else {
+            break;
+        }
     }
 
     xSemaphoreTake(data_lock, portMAX_DELAY);
     memset(current_data.events, 0, sizeof(current_data.events));
     memcpy(current_data.events, events, event_count * sizeof(*events));
-    current_data.event_count = event_count;
+    current_data.event_count = (uint8_t)event_count;
     current_data.events_valid = true;
     current_data.from_cache = false;
     xSemaphoreGive(data_lock);
+    free(raw_events);
     free(events);
     cJSON_Delete(root);
-    ESP_LOGI(TAG, "Parsed %u VVV events for today and tomorrow", event_count);
+    ESP_LOGI(TAG, "Parsed %u VVV events for today and tomorrow",
+             (unsigned)event_count);
     return true;
 }
 
