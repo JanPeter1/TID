@@ -1,6 +1,6 @@
 # Texel-Info-Display
 
-ESP-IDF firmware for the ESP32-2432S028 CYD and Guition JC3248W535C, using LVGL 9.6. Select a board profile at compile time; the UI uses a shared logical layout scaled to the selected display. Product requirements and remaining decisions are in [PRD.md](PRD.md).
+ESP-IDF firmware for the ESP32-2432S028 CYD with ILI9341 display and XPT2046 touch controller, using LVGL 9.6. The screen is 320 x 240 pixels in landscape orientation. Product requirements and remaining decisions are in [PRD.md](PRD.md).
 
 ## Current implementation
 
