@@ -1,6 +1,10 @@
 # Texel-Info-Display
 
-ESP-IDF firmware for the ESP32-2432S028 CYD with ILI9341 display and XPT2046 touch controller, using LVGL 9.6. The screen is 320 x 240 pixels in landscape orientation. Product requirements and remaining decisions are in [PRD.md](PRD.md).
+ESP-IDF firmware for the ESP32-2432S028 CYD with ILI9341 display, XPT2046 touch controller, and LVGL 9.6 rendering. The screen is 320 x 240 pixels in landscape orientation. Supports both CYD (SPI) and JC3248W535C (QSPI + I²C) boards via compile-time configuration. Product requirements are documented in [PRD.md](PRD.md).
+
+## No Agents Required
+
+This firmware uses a monolithic ESP-IDF architecture with all logic implemented in FreeRTOS tasks. There are no background agents, subagents, or external automation tools.
 
 ## Current implementation
 
