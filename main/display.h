@@ -30,6 +30,9 @@ esp_err_t display_draw_tide_chart(const int32_t *values, size_t count,
 esp_err_t display_draw_qr_code(int x, int y, int size, const char *data);
 esp_err_t display_draw_image(int x, int y, const lv_image_dsc_t *image);
 esp_err_t display_draw_jpeg(int x, int y, const uint8_t *data, size_t size);
+bool display_event_thumbnail_cached(const char *url);
+esp_err_t display_draw_event_thumbnail(int x, int y, const char *url,
+                                       const uint8_t *data, size_t size);
 esp_err_t display_draw_photo_jpeg(int x, int y, const uint8_t *data, size_t size);
 void display_text(int x, int y, const char *text, uint16_t color, uint8_t scale);
 void display_text_box(int x, int y, int width, int height, const char *text,

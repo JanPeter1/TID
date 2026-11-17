@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "data.h"
 #include "esp_attr.h"
 #include "esp_check.h"
 #include "esp_heap_caps.h"
@@ -11,6 +12,7 @@
 #include "freertos/task.h"
 #include "german_font.h"
 #include "lvgl.h"
+#include "image/lv_image_decoder_private.h"
 #include "memory.h"
 #include "display_hw.h"
 #include "touch.h"
@@ -18,6 +20,12 @@
 #define LVGL_LINE_CAPACITY 256
 #define PHOTO_FS_LETTER 'P'
 #define PHOTO_FS_PATH "P:photo.jpg"
+#define EVENT_THUMBNAIL_WIDTH 80
+#define EVENT_THUMBNAIL_HEIGHT 60
+#define EVENT_THUMBNAIL_PIXEL_COUNT \
+    (EVENT_THUMBNAIL_WIDTH * EVENT_THUMBNAIL_HEIGHT)
+#define EVENT_THUMBNAIL_BYTES \
+    (EVENT_THUMBNAIL_PIXEL_COUNT * sizeof(uint16_t))
 
 static const char *TAG = "display";
 static lv_display_t *lv_display;
@@ -34,6 +42,16 @@ static size_t photo_fs_position;
 static lv_fs_drv_t photo_fs_driver;
 static lv_point_precise_t line_points[LVGL_LINE_CAPACITY][2];
 static uint8_t *display_buffer;
+
+typedef struct {
+    char url[DATA_EVENT_IMAGE_URL_LENGTH];
+    uint16_t *pixels;
+    uint64_t last_used;
+    lv_image_dsc_t image;
+} event_thumbnail_cache_entry_t;
+
+static event_thumbnail_cache_entry_t event_thumbnail_cache[DATA_EVENT_COUNT];
+static uint64_t event_thumbnail_use_counter;
 
 static bool photo_fs_ready(lv_fs_drv_t *driver)
 {
@@ -548,13 +566,197 @@ esp_err_t display_draw_image(int x, int y, const lv_image_dsc_t *image)
     return ESP_OK;
 }
 
+static event_thumbnail_cache_entry_t *find_event_thumbnail(const char *url)
+{
+    if (!url || !url[0]) return NULL;
+    for (size_t i = 0; i < DATA_EVENT_COUNT; i++) {
+        event_thumbnail_cache_entry_t *entry = &event_thumbnail_cache[i];
+        if (entry->url[0] && strcmp(entry->url, url) == 0) {
+            entry->last_used = ++event_thumbnail_use_counter;
+            return entry;
+        }
+    }
+    return NULL;
+}
+
+bool display_event_thumbnail_cached(const char *url)
+{
+    return find_event_thumbnail(url) != NULL;
+}
+
+static esp_err_t decode_event_thumbnail(const uint8_t *data, size_t size,
+                                        uint16_t *pixels)
+{
+    photo_fs_data = data;
+    photo_fs_size = size;
+
+    lv_image_decoder_dsc_t decoder;
+    lv_image_decoder_args_t args = {.no_cache = true};
+    if (lv_image_decoder_open(&decoder, PHOTO_FS_PATH, &args) != LV_RESULT_OK) {
+        ESP_LOGW(TAG, "LVGL could not open event JPEG (%u bytes)",
+                 (unsigned)size);
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
+    uint32_t source_width = decoder.header.w;
+    uint32_t source_height = decoder.header.h;
+    if (!source_width || !source_height ||
+        decoder.header.cf != LV_COLOR_FORMAT_RGB888) {
+        lv_image_decoder_close(&decoder);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    uint32_t scaled_width;
+    uint32_t scaled_height;
+    if ((uint64_t)EVENT_THUMBNAIL_WIDTH * source_height <=
+        (uint64_t)EVENT_THUMBNAIL_HEIGHT * source_width) {
+        scaled_width = EVENT_THUMBNAIL_WIDTH;
+        scaled_height = source_height * EVENT_THUMBNAIL_WIDTH / source_width;
+    } else {
+        scaled_height = EVENT_THUMBNAIL_HEIGHT;
+        scaled_width = source_width * EVENT_THUMBNAIL_HEIGHT / source_height;
+    }
+    if (!scaled_width) scaled_width = 1;
+    if (!scaled_height) scaled_height = 1;
+
+    int32_t source_x[EVENT_THUMBNAIL_WIDTH];
+    int32_t source_y[EVENT_THUMBNAIL_HEIGHT];
+    int offset_x = (EVENT_THUMBNAIL_WIDTH - (int)scaled_width) / 2;
+    int offset_y = (EVENT_THUMBNAIL_HEIGHT - (int)scaled_height) / 2;
+    for (int x = 0; x < EVENT_THUMBNAIL_WIDTH; x++) {
+        source_x[x] = x < offset_x || x >= offset_x + (int)scaled_width
+            ? -1
+            : (int32_t)((uint32_t)(x - offset_x) * source_width / scaled_width);
+    }
+    for (int y = 0; y < EVENT_THUMBNAIL_HEIGHT; y++) {
+        source_y[y] = y < offset_y || y >= offset_y + (int)scaled_height
+            ? -1
+            : (int32_t)((uint32_t)(y - offset_y) * source_height / scaled_height);
+    }
+    memset(pixels, 0, EVENT_THUMBNAIL_BYTES);
+
+    lv_area_t full_area = {
+        .x1 = 0,
+        .y1 = 0,
+        .x2 = (lv_coord_t)source_width - 1,
+        .y2 = (lv_coord_t)source_height - 1,
+    };
+    lv_area_t decoded_area = {
+        .x1 = LV_COORD_MIN,
+        .y1 = LV_COORD_MIN,
+        .x2 = LV_COORD_MIN,
+        .y2 = LV_COORD_MIN,
+    };
+    uint32_t max_areas = ((source_width + 7U) / 8U) *
+                         ((source_height + 7U) / 8U);
+    bool complete = false;
+    esp_err_t err = ESP_FAIL;
+    for (uint32_t i = 0; i < max_areas; i++) {
+        if (lv_image_decoder_get_area(&decoder, &full_area, &decoded_area) !=
+            LV_RESULT_OK) {
+            break;
+        }
+        const lv_draw_buf_t *area = decoder.decoded;
+        if (!area || !area->data || area->header.cf != LV_COLOR_FORMAT_RGB888 ||
+            area->header.stride < (uint32_t)lv_area_get_width(&decoded_area) * 3U) {
+            err = ESP_ERR_INVALID_RESPONSE;
+            break;
+        }
+
+        const uint8_t *rgb = area->data;
+        uint32_t stride = area->header.stride;
+        for (int y = 0; y < EVENT_THUMBNAIL_HEIGHT; y++) {
+            int32_t sy = source_y[y];
+            if (sy < decoded_area.y1 || sy > decoded_area.y2) continue;
+            for (int x = 0; x < EVENT_THUMBNAIL_WIDTH; x++) {
+                int32_t sx = source_x[x];
+                if (sx < decoded_area.x1 || sx > decoded_area.x2) continue;
+                const uint8_t *pixel =
+                    rgb + (size_t)(sy - decoded_area.y1) * stride +
+                    (size_t)(sx - decoded_area.x1) * 3U;
+                pixels[y * EVENT_THUMBNAIL_WIDTH + x] =
+                    lv_color_to_u16(lv_color_make(pixel[0], pixel[1], pixel[2]));
+            }
+        }
+
+        if (decoded_area.x2 + 1 >= (lv_coord_t)source_width &&
+            decoded_area.y2 + 1 >= (lv_coord_t)source_height) {
+            complete = true;
+            err = ESP_OK;
+            break;
+        }
+    }
+    lv_image_decoder_close(&decoder);
+    return complete ? err : ESP_FAIL;
+}
+
+static event_thumbnail_cache_entry_t *event_thumbnail_cache_slot(void)
+{
+    event_thumbnail_cache_entry_t *oldest = &event_thumbnail_cache[0];
+    for (size_t i = 0; i < DATA_EVENT_COUNT; i++) {
+        event_thumbnail_cache_entry_t *entry = &event_thumbnail_cache[i];
+        if (!entry->url[0]) return entry;
+        if (entry->last_used < oldest->last_used) oldest = entry;
+    }
+    return oldest;
+}
+
+esp_err_t display_draw_event_thumbnail(int x, int y, const char *url,
+                                       const uint8_t *data, size_t size)
+{
+    if (!url || !url[0]) return ESP_ERR_INVALID_ARG;
+    size_t url_length = strnlen(url, DATA_EVENT_IMAGE_URL_LENGTH);
+    if (url_length >= DATA_EVENT_IMAGE_URL_LENGTH) return ESP_ERR_INVALID_SIZE;
+
+    event_thumbnail_cache_entry_t *entry = find_event_thumbnail(url);
+    if (entry) return display_draw_image(x, y, &entry->image);
+    if (!data || size < 4 || data[0] != 0xFF || data[1] != 0xD8) {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    uint16_t *pixels = memory_alloc(EVENT_THUMBNAIL_BYTES, MEMORY_ALLOC_LARGE);
+    if (!pixels) return ESP_ERR_NO_MEM;
+    esp_err_t err = decode_event_thumbnail(data, size, pixels);
+    if (err != ESP_OK) {
+        memory_free(pixels);
+        ESP_LOGW(TAG, "Could not create event thumbnail: %s",
+                 esp_err_to_name(err));
+        return err;
+    }
+
+    entry = event_thumbnail_cache_slot();
+    memory_free(entry->pixels);
+    entry->pixels = pixels;
+    memcpy(entry->url, url, url_length + 1);
+    entry->last_used = ++event_thumbnail_use_counter;
+    entry->image = (lv_image_dsc_t) {
+        .header = {
+            .magic = LV_IMAGE_HEADER_MAGIC,
+            .cf = LV_COLOR_FORMAT_RGB565,
+            .w = EVENT_THUMBNAIL_WIDTH,
+            .h = EVENT_THUMBNAIL_HEIGHT,
+            .stride = EVENT_THUMBNAIL_WIDTH * sizeof(uint16_t),
+        },
+        .data_size = EVENT_THUMBNAIL_BYTES,
+        .data = (const uint8_t *)pixels,
+    };
+    return display_draw_image(x, y, &entry->image);
+}
+
 static esp_err_t draw_jpeg(int x, int y, const uint8_t *data, size_t size)
 {
-    if (!screen || !data || size < 4 || data[0] != 0xFF || data[1] != 0xD8) {
+    if (!screen || !data || size < 4 ||
+        data[0] != 0xFF || data[1] != 0xD8) {
         return ESP_ERR_INVALID_ARG;
     }
     photo_fs_data = data;
     photo_fs_size = size;
+    lv_image_header_t header = {0};
+    if (lv_image_decoder_get_info(PHOTO_FS_PATH, &header) != LV_RESULT_OK) {
+        ESP_LOGW(TAG, "LVGL could not decode JPEG image (%u bytes)",
+                 (unsigned)size);
+        return ESP_ERR_NOT_SUPPORTED;
+    }
     lv_obj_t *object = lv_image_create(screen);
     if (!object) return ESP_ERR_NO_MEM;
     lv_image_set_src(object, PHOTO_FS_PATH);

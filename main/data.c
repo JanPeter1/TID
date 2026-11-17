@@ -40,6 +40,15 @@
 #define CALENDAR_GROUPS_URL \
     "https://familie-riegel.de/tx94/content/plugins/occcal/Texelkalender_gruppen.txt"
 #define PHOTO_BIT BIT1
+#define EVENT_IMAGE_BIT BIT2
+#define PHOTO_PREFETCH_BIT BIT3
+#define EVENT_IMAGE_CDN_PREFIX "https://texel-cdn.travelbase.nl/"
+#if BOARD_EVENT_IMAGE_MAX_BYTES >= 4
+#define EVENT_IMAGE_GRAPHQL_FIELD \
+    "listImage { transform(config: TILE, format: JPEG) { src } } "
+#else
+#define EVENT_IMAGE_GRAPHQL_FIELD ""
+#endif
 #define CACHE_PARTITION "content_cache"
 #define CACHE_NAMESPACE "content"
 #define CACHE_KEY "last_good"
@@ -55,10 +64,34 @@ static uint32_t photo_request_serial;
 static bool photo_jpeg_in_use;
 static bool photo_release_pending;
 static bool photo_requested;
+static uint8_t *photo_prefetch_jpeg_buffer;
+static size_t photo_prefetch_jpeg_size;
+static size_t photo_prefetch_jpeg_capacity;
+static uint32_t photo_prefetch_serial;
+static bool photo_prefetch_jpeg_in_use;
+static bool photo_prefetch_release_pending;
+static bool photo_prefetch_requested;
+static bool photo_prefetch_ready;
+static uint16_t photo_prefetch_count;
+static uint16_t photo_prefetch_number;
+static char photo_prefetch_path[DATA_PHOTO_PATH_LENGTH];
+static char photo_prefetch_title[DATA_PHOTO_TITLE_LENGTH];
+static char photo_prefetch_date[DATA_PHOTO_DATE_LENGTH];
 static char last_photo_path[DATA_PHOTO_PATH_LENGTH];
+static uint8_t *event_image_jpeg_buffer;
+static size_t event_image_jpeg_size;
+static size_t event_image_jpeg_capacity;
+static uint32_t event_image_request_serial;
+static bool event_image_jpeg_in_use;
+static bool event_image_release_pending;
+static bool event_image_requested;
+static uint8_t event_image_requested_index;
+static char event_image_request_url[DATA_EVENT_IMAGE_URL_LENGTH];
+static char loaded_event_image_url[DATA_EVENT_IMAGE_URL_LENGTH];
 #define REFRESH_BIT BIT0
 
 static void html_to_text(char *html);
+static bool valid_event_image_url(const char *url);
 
 typedef struct
 {
@@ -150,53 +183,70 @@ static bool http_get(const char *url, const char *username, const char *password
     return success;
 }
 
-static void finish_photo_buffer_use(void)
+static void finish_photo_buffer_use(bool prefetch)
 {
     xSemaphoreTake(data_lock, portMAX_DELAY);
-    photo_jpeg_in_use = false;
-    if (photo_release_pending)
+    bool *in_use = prefetch ? &photo_prefetch_jpeg_in_use : &photo_jpeg_in_use;
+    bool *release_pending = prefetch ? &photo_prefetch_release_pending
+                                     : &photo_release_pending;
+    uint8_t **buffer = prefetch ? &photo_prefetch_jpeg_buffer
+                                : &photo_jpeg_buffer;
+    size_t *capacity = prefetch ? &photo_prefetch_jpeg_capacity
+                                : &photo_jpeg_capacity;
+    size_t *size = prefetch ? &photo_prefetch_jpeg_size : &photo_jpeg_size;
+    *in_use = false;
+    if (*release_pending)
     {
-        memory_free(photo_jpeg_buffer);
-        photo_jpeg_buffer = NULL;
-        photo_jpeg_capacity = 0;
-        photo_jpeg_size = 0;
-        photo_release_pending = false;
+        memory_free(*buffer);
+        *buffer = NULL;
+        *capacity = 0;
+        *size = 0;
+        *release_pending = false;
     }
     xSemaphoreGive(data_lock);
 }
 
 static bool http_get_photo_file(const char *url, uint32_t expected_size,
-                                uint32_t request_serial, size_t *written)
+                                uint32_t request_serial, bool prefetch,
+                                size_t *written)
 {
     if (expected_size < 4 || expected_size > DATA_PHOTO_MAX_BYTES)
         return false;
     xSemaphoreTake(data_lock, portMAX_DELAY);
-    if (request_serial != photo_request_serial)
+    if ((prefetch && request_serial != photo_prefetch_serial) ||
+        (!prefetch && request_serial != photo_request_serial))
     {
         xSemaphoreGive(data_lock);
         return false;
     }
-    photo_jpeg_in_use = true;
+    if (prefetch)
+        photo_prefetch_jpeg_in_use = true;
+    else
+        photo_jpeg_in_use = true;
     xSemaphoreGive(data_lock);
 
+    uint8_t **jpeg_buffer = prefetch ? &photo_prefetch_jpeg_buffer
+                                     : &photo_jpeg_buffer;
+    size_t *jpeg_capacity = prefetch ? &photo_prefetch_jpeg_capacity
+                                     : &photo_jpeg_capacity;
     size_t required_capacity = (size_t)expected_size + 1;
-    if (photo_jpeg_capacity != required_capacity)
+    if (*jpeg_capacity != required_capacity)
     {
         uint8_t *resized = memory_alloc(required_capacity, MEMORY_ALLOC_LARGE);
         if (!resized)
         {
-            finish_photo_buffer_use();
+            finish_photo_buffer_use(prefetch);
             return false;
         }
-        memory_free(photo_jpeg_buffer);
-        photo_jpeg_buffer = resized;
-        photo_jpeg_capacity = required_capacity;
+        memory_free(*jpeg_buffer);
+        *jpeg_buffer = resized;
+        *jpeg_capacity = required_capacity;
     }
     response_buffer_t response = {
-        .data = (char *)photo_jpeg_buffer,
+        .data = (char *)*jpeg_buffer,
         .capacity = required_capacity,
     };
-    photo_jpeg_buffer[0] = 0;
+    (*jpeg_buffer)[0] = 0;
     esp_http_client_config_t config = {
         .url = url,
         .event_handler = response_event,
@@ -210,7 +260,7 @@ static bool http_get_photo_file(const char *url, uint32_t expected_size,
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (!client)
     {
-        finish_photo_buffer_use();
+        finish_photo_buffer_use(prefetch);
         return false;
     }
     const uint32_t internal_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
@@ -240,7 +290,7 @@ static bool http_get_photo_file(const char *url, uint32_t expected_size,
     }
     bool success = err == ESP_OK && status >= 200 && status < 300 &&
                    !response.overflow && response.length == expected_size &&
-                   photo_jpeg_buffer[0] == 0xFF && photo_jpeg_buffer[1] == 0xD8;
+                   (*jpeg_buffer)[0] == 0xFF && (*jpeg_buffer)[1] == 0xD8;
     if (!success)
     {
         ESP_LOGW(TAG, "Photo download failed: %s, HTTP %d, bytes %u, overflow %d",
@@ -258,12 +308,128 @@ static bool http_get_photo_file(const char *url, uint32_t expected_size,
              (unsigned)heap_caps_get_largest_free_block(internal_caps));
     if (!success)
     {
-        finish_photo_buffer_use();
+        finish_photo_buffer_use(prefetch);
         return false;
     }
     *written = response.length;
-    finish_photo_buffer_use();
+    finish_photo_buffer_use(prefetch);
     return true;
+}
+
+static void finish_event_image_buffer_use(void)
+{
+    xSemaphoreTake(data_lock, portMAX_DELAY);
+    event_image_jpeg_in_use = false;
+    if (event_image_release_pending)
+    {
+        memory_free(event_image_jpeg_buffer);
+        event_image_jpeg_buffer = NULL;
+        event_image_jpeg_capacity = 0;
+        event_image_jpeg_size = 0;
+        loaded_event_image_url[0] = '\0';
+        event_image_release_pending = false;
+    }
+    xSemaphoreGive(data_lock);
+}
+
+static bool http_get_event_image_file(const char *url, uint32_t request_serial,
+                                     size_t *written)
+{
+    if (!valid_event_image_url(url) || !written ||
+        BOARD_EVENT_IMAGE_MAX_BYTES < 4U)
+    {
+        return false;
+    }
+    xSemaphoreTake(data_lock, portMAX_DELAY);
+    if (request_serial != event_image_request_serial || !event_image_requested)
+    {
+        xSemaphoreGive(data_lock);
+        return false;
+    }
+    event_image_jpeg_in_use = true;
+    xSemaphoreGive(data_lock);
+
+    const size_t required_capacity = (size_t)BOARD_EVENT_IMAGE_MAX_BYTES + 1U;
+    if (event_image_jpeg_capacity != required_capacity)
+    {
+        uint8_t *resized = memory_alloc(required_capacity, MEMORY_ALLOC_LARGE);
+        if (!resized)
+        {
+            finish_event_image_buffer_use();
+            return false;
+        }
+        memory_free(event_image_jpeg_buffer);
+        event_image_jpeg_buffer = resized;
+        event_image_jpeg_capacity = required_capacity;
+    }
+    response_buffer_t response = {
+        .data = (char *)event_image_jpeg_buffer,
+        .capacity = required_capacity,
+    };
+    esp_http_client_config_t config = {
+        .url = url,
+        .event_handler = response_event,
+        .user_data = &response,
+        .timeout_ms = 30000,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .keep_alive_enable = true,
+        .method = HTTP_METHOD_GET,
+        .buffer_size = 2048,
+        .buffer_size_tx = 1024,
+    };
+
+    esp_err_t err = ESP_FAIL;
+    int status = 0;
+    for (unsigned attempt = 0; attempt < 2; attempt++)
+    {
+        response.length = 0;
+        response.overflow = false;
+        event_image_jpeg_buffer[0] = 0;
+
+        esp_http_client_handle_t client = esp_http_client_init(&config);
+        if (!client)
+        {
+            err = ESP_ERR_NO_MEM;
+            break;
+        }
+        err = esp_http_client_set_header(client, "Accept", "image/jpeg");
+        if (err == ESP_OK)
+        {
+            err = esp_http_client_set_header(
+                client, "Referer",
+                "https://www.texel.net/de/veranstaltungsuebersicht/");
+        }
+        if (err == ESP_OK)
+            err = esp_http_client_perform(client);
+        status = esp_http_client_get_status_code(client);
+        esp_http_client_cleanup(client);
+        if ((err != ESP_ERR_HTTP_INCOMPLETE_DATA &&
+             err != ESP_ERR_HTTP_FETCH_HEADER) ||
+            attempt != 0)
+            break;
+        ESP_LOGW(TAG, "Event image attempt 1 failed: %s, HTTP %d; retrying",
+                 esp_err_to_name(err), status);
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
+    bool success = err == ESP_OK && status == 200 && !response.overflow &&
+                   response.length >= 4U &&
+                   event_image_jpeg_buffer[0] == 0xFF &&
+                   event_image_jpeg_buffer[1] == 0xD8 &&
+                   event_image_jpeg_buffer[response.length - 2U] == 0xFF &&
+                   event_image_jpeg_buffer[response.length - 1U] == 0xD9;
+    if (!success)
+    {
+        ESP_LOGW(TAG, "Event image download failed: %s, HTTP %d, bytes %u, overflow %d",
+                 esp_err_to_name(err), status, (unsigned)response.length,
+                 response.overflow);
+    }
+    else
+    {
+        *written = response.length;
+    }
+    finish_event_image_buffer_use();
+    return success;
 }
 
 static bool http_post_json(const char *url, const char *body,
@@ -319,7 +485,6 @@ static bool http_post_json(const char *url, const char *body,
         }
         if (err == ESP_OK)
         {
-            ESP_LOGI(TAG, "DO_POST %s: %s, body length %u", url, body, (unsigned)strlen(body));
             err = esp_http_client_perform(client);
         }
         int status = esp_http_client_get_status_code(client);
@@ -370,6 +535,20 @@ static const char *json_string(cJSON *object, const char *key)
 {
     cJSON *item = object_item(object, key);
     return cJSON_IsString(item) ? item->valuestring : NULL;
+}
+
+static const char *event_image_url(cJSON *hit)
+{
+    cJSON *list_image = object_item(hit, "listImage");
+    cJSON *transform = object_item(list_image, "transform");
+    return json_string(transform, "src");
+}
+
+static bool valid_event_image_url(const char *url)
+{
+    return url && strlen(url) < DATA_EVENT_IMAGE_URL_LENGTH &&
+           strncmp(url, EVENT_IMAGE_CDN_PREFIX,
+                   sizeof(EVENT_IMAGE_CDN_PREFIX) - 1) == 0;
 }
 
 static bool photo_date_valid(const char *date)
@@ -502,8 +681,6 @@ static bool decode_html_entity(const char *text, uint32_t *codepoint,
         {"&lsquo;", 0x2018},
         {"&rdquo;", 0x201D},
         {"&ldquo;", 0x201C},
-        {"„", '"'},
-        {"“", '"'},
     };
 
     if (text[0] != '&')
@@ -665,6 +842,7 @@ typedef struct
     char title[DATA_EVENT_TITLE_LENGTH];
     char place[DATA_EVENT_PLACE_LENGTH];
     char slug[DATA_EVENT_URL_LENGTH];
+    char image_url[DATA_EVENT_IMAGE_URL_LENGTH];
     uint8_t day_offset;
 } raw_texel_event_t;
 
@@ -725,6 +903,7 @@ static bool parse_event_response(const char *json, const char *today, const char
         const char *title = json_string(hit, "name");
         const char *slug = json_string(hit, "slug");
         const char *place = json_string(hit, "place");
+        const char *image_url_value = event_image_url(hit);
         cJSON *timeslots = object_item(hit, "timeslots");
         if (!title || !slug || !cJSON_IsArray(timeslots))
             continue;
@@ -750,6 +929,11 @@ static bool parse_event_response(const char *json, const char *today, const char
             copy_event_field(event.title, sizeof(event.title), title);
             copy_event_field(event.place, sizeof(event.place), place);
             snprintf(event.slug, sizeof(event.slug), "%s", slug);
+            if (valid_event_image_url(image_url_value))
+            {
+                snprintf(event.image_url, sizeof(event.image_url), "%s",
+                         image_url_value);
+            }
             event.day_offset = day_offset;
 
             bool duplicate = false;
@@ -820,6 +1004,8 @@ static bool parse_event_response(const char *json, const char *today, const char
             copy_event_field(group->place, sizeof(group->place), event->place);
             snprintf(group->url, sizeof(group->url),
                      "https://www.texel.net/de/aktivitat/%s/", event->slug);
+            snprintf(group->image_url, sizeof(group->image_url), "%s",
+                     event->image_url);
             group->day_offset = event->day_offset;
             group->time_count = 1;
             grouped_time_count = 1;
@@ -839,6 +1025,12 @@ static bool parse_event_response(const char *json, const char *today, const char
     current_data.event_count = (uint8_t)event_count;
     current_data.events_valid = true;
     current_data.from_cache = false;
+    event_image_request_serial++;
+    event_image_requested = false;
+    event_image_request_url[0] = '\0';
+    current_data.event_image_ready = false;
+    current_data.event_image_error = false;
+    current_data.event_image_generation++;
     xSemaphoreGive(data_lock);
     free(raw_events);
     free(events);
@@ -846,31 +1038,6 @@ static bool parse_event_response(const char *json, const char *today, const char
     ESP_LOGI(TAG, "Parsed %u VVV events for today and tomorrow",
              (unsigned)event_count);
     return true;
-}
-
-static void log_vvv_response(const char *response)
-{
-    size_t length = 0;
-    while (length < EVENT_RESPONSE_LIMIT && response[length])
-        length++;
-    ESP_LOGI(TAG, "VVV response (%u bytes):", (unsigned)length);
-
-    for (size_t offset = 0; offset < length;)
-    {
-        size_t chunk_length = length - offset;
-        if (chunk_length > 256)
-            chunk_length = 256;
-        while (chunk_length > 0 && offset + chunk_length < length &&
-               ((unsigned char)response[offset + chunk_length] & 0xC0) == 0x80)
-        {
-            chunk_length--;
-        }
-        if (!chunk_length)
-            chunk_length = length - offset;
-        ESP_LOGI(TAG, "VVV response [%u]: %.*s",
-                 (unsigned)offset, (int)chunk_length, response + offset);
-        offset += chunk_length;
-    }
 }
 
 #define VVV_API_PAGE_LIMIT 12
@@ -894,6 +1061,7 @@ static bool parse_event_response_accumulate(const char *json, const char *today,
         const char *title = json_string(hit, "name");
         const char *slug = json_string(hit, "slug");
         const char *place = json_string(hit, "place");
+        const char *image_url_value = event_image_url(hit);
         cJSON *timeslots = object_item(hit, "timeslots");
         if (!title || !slug || !cJSON_IsArray(timeslots))
             continue;
@@ -918,6 +1086,11 @@ static bool parse_event_response_accumulate(const char *json, const char *today,
             copy_event_field(event.title, sizeof(event.title), title);
             copy_event_field(event.place, sizeof(event.place), place);
             snprintf(event.slug, sizeof(event.slug), "%s", slug);
+            if (valid_event_image_url(image_url_value))
+            {
+                snprintf(event.image_url, sizeof(event.image_url), "%s",
+                         image_url_value);
+            }
             event.day_offset = day_offset;
 
             bool duplicate = false;
@@ -957,6 +1130,7 @@ static void fetch_events(void)
         "$endDate: String!) { activities(params: $params, limit: $limit, "
         "offset: $offset, order: $order) { ... on ActivitySearchResult { "
         "totalHits hits { ... on Activity { name slug place "
+        EVENT_IMAGE_GRAPHQL_FIELD
         "timeslots(startDate: $startDate, endDate: $endDate) { "
         "startDateTime endDateTime } } } } } }";
     cJSON *request = cJSON_CreateObject();
@@ -972,7 +1146,7 @@ static void fetch_events(void)
     }
     cJSON_AddStringToObject(request, "operationName", "ActivitySearch");
     cJSON_AddStringToObject(request, "query", query);
-    // Keep the API page size aligned with the number of events this board stores.
+    // Keep each request at the known-working gateway limit; paginate as needed.
     cJSON_AddNumberToObject(variables, "limit", VVV_API_PAGE_LIMIT);
     // Randomize order. The random seed used is the current date, so the order will be identical between pageloads and between users, but change daily.
     cJSON_AddStringToObject(variables, "order", "RANDOM"); // RANDOM, TIMESLOTS_ASC, REVIEW_RATING_DESC
@@ -1022,7 +1196,6 @@ static void fetch_events(void)
         memset(response, 0, EVENT_RESPONSE_LIMIT);
         bool response_ok = http_post_json("https://texel-gateway.travelbase.nl/graphql",
                                           body, response, EVENT_RESPONSE_LIMIT);
-        log_vvv_response(response);
         if (response_ok)
         {
             if (!parse_event_response_accumulate(response, today, tomorrow, raw_events, &raw_event_count, raw_event_capacity))
@@ -1094,6 +1267,8 @@ static void fetch_events(void)
                     copy_event_field(group->place, sizeof(group->place), event->place);
                     snprintf(group->url, sizeof(group->url),
                              "https://www.texel.net/de/aktivitat/%s/", event->slug);
+                    snprintf(group->image_url, sizeof(group->image_url), "%s",
+                             event->image_url);
                     group->day_offset = event->day_offset;
                     group->time_count = 1;
                     grouped_time_count = 1;
@@ -1113,6 +1288,12 @@ static void fetch_events(void)
             current_data.event_count = (uint8_t)event_count;
             current_data.events_valid = true;
             current_data.from_cache = false;
+            event_image_request_serial++;
+            event_image_requested = false;
+            event_image_request_url[0] = '\0';
+            current_data.event_image_ready = false;
+            current_data.event_image_error = false;
+            current_data.event_image_generation++;
             xSemaphoreGive(data_lock);
             free(events);
             ESP_LOGI(TAG, "Parsed %u VVV events for today and tomorrow (from %u raw events across %d pages)",
@@ -1312,6 +1493,11 @@ static void html_to_text(char *html)
             if (*read == '&' &&
                 decode_html_entity(read, &codepoint, &entity_length))
             {
+                if (codepoint == 0x201C || codepoint == 0x201E ||
+                    codepoint == 0x201D)
+                {
+                    codepoint = '"';
+                }
                 append_utf8(&write, codepoint);
                 read += entity_length - 1;
             }
@@ -1322,6 +1508,16 @@ static void html_to_text(char *html)
                 if (!sequence_length)
                 {
                     *write++ = '?';
+                }
+                else if (sequence_length == 3 &&
+                         (unsigned char)read[0] == 0xE2 &&
+                         (unsigned char)read[1] == 0x80 &&
+                         ((unsigned char)read[2] == 0x9C ||
+                          (unsigned char)read[2] == 0x9E ||
+                          (unsigned char)read[2] == 0x9D))
+                {
+                    *write++ = '"';
+                    read += sequence_length - 1;
                 }
                 else
                 {
@@ -1537,6 +1733,7 @@ static void mark_photo_error(uint32_t request_serial)
     xSemaphoreTake(data_lock, portMAX_DELAY);
     if (request_serial == photo_request_serial)
     {
+        photo_requested = false;
         current_data.photo_ready = false;
         current_data.photo_error = true;
         current_data.photo_generation++;
@@ -1544,13 +1741,38 @@ static void mark_photo_error(uint32_t request_serial)
     xSemaphoreGive(data_lock);
 }
 
-static void fetch_random_photo(uint32_t request_serial)
+static bool photo_request_is_current(uint32_t request_serial, bool prefetch)
 {
+    xSemaphoreTake(data_lock, portMAX_DELAY);
+    bool current = prefetch
+                       ? request_serial == photo_prefetch_serial &&
+                             photo_prefetch_requested
+                       : request_serial == photo_request_serial &&
+                             photo_requested;
+    xSemaphoreGive(data_lock);
+    return current;
+}
+
+static void mark_photo_prefetch_failed(uint32_t request_serial)
+{
+    xSemaphoreTake(data_lock, portMAX_DELAY);
+    if (request_serial == photo_prefetch_serial)
+        photo_prefetch_requested = false;
+    xSemaphoreGive(data_lock);
+}
+
+static void fetch_random_photo(uint32_t request_serial, bool prefetch)
+{
+    if (!photo_request_is_current(request_serial, prefetch))
+        return;
     char *manifest = memory_alloc(PHOTO_MANIFEST_LIMIT, MEMORY_ALLOC_LARGE);
     if (!manifest)
     {
         ESP_LOGE(TAG, "Could not allocate photo manifest buffer");
-        mark_photo_error(request_serial);
+        if (prefetch)
+            mark_photo_prefetch_failed(request_serial);
+        else
+            mark_photo_error(request_serial);
         return;
     }
     memset(manifest, 0, PHOTO_MANIFEST_LIMIT);
@@ -1558,7 +1780,10 @@ static void fetch_random_photo(uint32_t request_serial)
                   PHOTO_MANIFEST_LIMIT))
     {
         memory_free(manifest);
-        mark_photo_error(request_serial);
+        if (prefetch)
+            mark_photo_prefetch_failed(request_serial);
+        else
+            mark_photo_error(request_serial);
         return;
     }
 
@@ -1569,7 +1794,10 @@ static void fetch_random_photo(uint32_t request_serial)
     {
         ESP_LOGW(TAG, "Photo manifest has no images array");
         cJSON_Delete(root);
-        mark_photo_error(request_serial);
+        if (prefetch)
+            mark_photo_prefetch_failed(request_serial);
+        else
+            mark_photo_error(request_serial);
         return;
     }
 
@@ -1590,10 +1818,17 @@ static void fetch_random_photo(uint32_t request_serial)
     {
         ESP_LOGW(TAG, "Photo manifest contains no usable images");
         cJSON_Delete(root);
-        mark_photo_error(request_serial);
+        if (prefetch)
+            mark_photo_prefetch_failed(request_serial);
+        else
+            mark_photo_error(request_serial);
         return;
     }
 
+    char previous_path[DATA_PHOTO_PATH_LENGTH];
+    xSemaphoreTake(data_lock, portMAX_DELAY);
+    snprintf(previous_path, sizeof(previous_path), "%s", last_photo_path);
+    xSemaphoreGive(data_lock);
     size_t selected_index = esp_random() % valid_count;
     char selected_path[DATA_PHOTO_PATH_LENGTH] = {0};
     char selected_date[DATA_PHOTO_DATE_LENGTH] = {0};
@@ -1618,12 +1853,13 @@ static void fetch_random_photo(uint32_t request_serial)
             selected_size = photo_size;
             break;
         }
-        if (valid_count == 1 || strcmp(selected_path, last_photo_path) != 0)
+        if (valid_count == 1 || strcmp(selected_path, previous_path) != 0)
             break;
         selected_index = (selected_index + 1) % valid_count;
     }
     xSemaphoreTake(data_lock, portMAX_DELAY);
-    if (request_serial == photo_request_serial)
+    if (!prefetch && request_serial == photo_request_serial &&
+        photo_requested)
     {
         current_data.photo_count = valid_count > UINT16_MAX
                                        ? UINT16_MAX
@@ -1639,15 +1875,19 @@ static void fetch_random_photo(uint32_t request_serial)
     char url[sizeof(PHOTO_BASE_URL) + DATA_PHOTO_PATH_LENGTH];
     snprintf(url, sizeof(url), "%s%s", PHOTO_BASE_URL, selected_path);
     size_t downloaded_size = 0;
-    if (!http_get_photo_file(url, selected_size, request_serial, &downloaded_size))
+    if (!http_get_photo_file(url, selected_size, request_serial, prefetch,
+                             &downloaded_size))
     {
-        mark_photo_error(request_serial);
+        if (prefetch)
+            mark_photo_prefetch_failed(request_serial);
+        else
+            mark_photo_error(request_serial);
         return;
     }
 
     xSemaphoreTake(data_lock, portMAX_DELAY);
     bool photo_ready = false;
-    if (request_serial == photo_request_serial)
+    if (!prefetch && request_serial == photo_request_serial && photo_requested)
     {
         photo_jpeg_size = downloaded_size;
         current_data.photo_ready = true;
@@ -1658,7 +1898,27 @@ static void fetch_random_photo(uint32_t request_serial)
         snprintf(current_data.photo_date, sizeof(current_data.photo_date),
                  "%s", selected_date);
         snprintf(last_photo_path, sizeof(last_photo_path), "%s", selected_path);
+        photo_requested = false;
         photo_ready = true;
+    }
+    else if (prefetch && request_serial == photo_prefetch_serial &&
+             photo_prefetch_requested)
+    {
+        photo_prefetch_jpeg_size = downloaded_size;
+        photo_prefetch_count = valid_count > UINT16_MAX
+                                   ? UINT16_MAX
+                                   : (uint16_t)valid_count;
+        photo_prefetch_number = selected_index >= UINT16_MAX
+                                    ? UINT16_MAX
+                                    : (uint16_t)(selected_index + 1);
+        snprintf(photo_prefetch_path, sizeof(photo_prefetch_path), "%s",
+                 selected_path);
+        snprintf(photo_prefetch_title, sizeof(photo_prefetch_title), "%s",
+                 selected_title);
+        snprintf(photo_prefetch_date, sizeof(photo_prefetch_date), "%s",
+                 selected_date);
+        photo_prefetch_ready = true;
+        photo_prefetch_requested = false;
     }
     xSemaphoreGive(data_lock);
     if (photo_ready)
@@ -1701,6 +1961,35 @@ static void fetch_all(void)
     ESP_LOGI(TAG, "Content refresh finished");
 }
 
+static void fetch_event_image(const char *url, uint32_t request_serial)
+{
+    size_t downloaded_size = 0;
+    bool success = http_get_event_image_file(url, request_serial,
+                                             &downloaded_size);
+    bool published = false;
+    xSemaphoreTake(data_lock, portMAX_DELAY);
+    if (request_serial == event_image_request_serial && event_image_requested)
+    {
+        event_image_requested = false;
+        current_data.event_image_index = event_image_requested_index;
+        current_data.event_image_ready = success;
+        current_data.event_image_error = !success;
+        current_data.event_image_generation++;
+        if (success)
+        {
+            event_image_jpeg_size = downloaded_size;
+            snprintf(loaded_event_image_url, sizeof(loaded_event_image_url),
+                     "%s", url);
+            published = true;
+        }
+    }
+    xSemaphoreGive(data_lock);
+    if (published)
+    {
+        ESP_LOGI(TAG, "Loaded event image (%u bytes)", (unsigned)downloaded_size);
+    }
+}
+
 static void load_cache(void)
 {
     nvs_handle_t handle;
@@ -1729,6 +2018,10 @@ static void load_cache(void)
             ESP_LOGW(TAG, "Ignoring invalid cached calendar entry count");
         }
         current_data.from_cache = true;
+        current_data.event_image_ready = false;
+        current_data.event_image_error = false;
+        current_data.event_image_index = 0;
+        current_data.event_image_generation++;
         current_data.photo_ready = false;
         current_data.photo_error = false;
         ESP_LOGI(TAG, "Restored cached content");
@@ -1749,6 +2042,24 @@ static void save_cache(void)
     err = nvs_set_blob(handle, CACHE_KEY, &current_data, sizeof(current_data));
     if (err == ESP_OK)
         err = nvs_commit(handle);
+    if (err == ESP_ERR_NVS_NOT_ENOUGH_SPACE)
+    {
+        ESP_LOGW(TAG, "Replacing old content cache record to free NVS space");
+        esp_err_t erase_err = nvs_erase_key(handle, CACHE_KEY);
+        if (erase_err == ESP_OK)
+            erase_err = nvs_commit(handle);
+        if (erase_err == ESP_OK)
+        {
+            err = nvs_set_blob(handle, CACHE_KEY, &current_data,
+                               sizeof(current_data));
+            if (err == ESP_OK)
+                err = nvs_commit(handle);
+        }
+        else
+        {
+            err = erase_err;
+        }
+    }
     if (err != ESP_OK)
         ESP_LOGW(TAG, "Could not save content cache: %s", esp_err_to_name(err));
     nvs_close(handle);
@@ -1760,22 +2071,32 @@ static void refresh_task(void *unused)
     TickType_t last_refresh = 0;
     bool refresh_pending = true;
     bool photo_pending = false;
+    bool photo_prefetch_pending = false;
+    bool event_image_pending = false;
     bool waiting_for_ip_logged = false;
     bool waiting_for_time_logged = false;
     while (true)
     {
-        EventBits_t bits = xEventGroupWaitBits(refresh_events, REFRESH_BIT | PHOTO_BIT,
+        EventBits_t bits = xEventGroupWaitBits(refresh_events,
+                                               REFRESH_BIT | PHOTO_BIT |
+                                                   EVENT_IMAGE_BIT |
+                                                   PHOTO_PREFETCH_BIT,
                                                pdTRUE, pdFALSE, pdMS_TO_TICKS(1000));
         TickType_t now = xTaskGetTickCount();
         if (bits & REFRESH_BIT)
             refresh_pending = true;
         if (bits & PHOTO_BIT)
             photo_pending = true;
+        if (bits & PHOTO_PREFETCH_BIT)
+            photo_prefetch_pending = true;
+        if (bits & EVENT_IMAGE_BIT)
+            event_image_pending = true;
         if (now - last_refresh >= pdMS_TO_TICKS(REFRESH_INTERVAL_MS))
         {
             refresh_pending = true;
         }
-        if (!refresh_pending && !photo_pending)
+        if (!refresh_pending && !photo_pending && !photo_prefetch_pending &&
+            !event_image_pending)
             continue;
 
         if (!config_wifi_connected())
@@ -1819,7 +2140,33 @@ static void refresh_task(void *unused)
             xSemaphoreGive(data_lock);
             photo_pending = false;
             if (requested)
-                fetch_random_photo(request_serial);
+                fetch_random_photo(request_serial, false);
+        }
+        if (photo_prefetch_pending)
+        {
+            uint32_t request_serial;
+            bool requested;
+            xSemaphoreTake(data_lock, portMAX_DELAY);
+            request_serial = photo_prefetch_serial;
+            requested = photo_prefetch_requested;
+            xSemaphoreGive(data_lock);
+            photo_prefetch_pending = false;
+            if (requested)
+                fetch_random_photo(request_serial, true);
+        }
+        if (event_image_pending)
+        {
+            uint32_t request_serial;
+            bool requested;
+            char url[DATA_EVENT_IMAGE_URL_LENGTH];
+            xSemaphoreTake(data_lock, portMAX_DELAY);
+            request_serial = event_image_request_serial;
+            requested = event_image_requested;
+            snprintf(url, sizeof(url), "%s", event_image_request_url);
+            xSemaphoreGive(data_lock);
+            event_image_pending = false;
+            if (requested)
+                fetch_event_image(url, request_serial);
         }
         ESP_LOGI(TAG, "Refresh task minimum remaining stack: %u bytes",
                  (unsigned)uxTaskGetStackHighWaterMark(NULL));
@@ -1871,6 +2218,166 @@ void data_request_refresh(void)
         xEventGroupSetBits(refresh_events, REFRESH_BIT);
 }
 
+void data_request_event_image(uint8_t event_index)
+{
+    if (!data_lock || !refresh_events)
+        return;
+
+    bool queue_request = false;
+    xSemaphoreTake(data_lock, portMAX_DELAY);
+    if (!current_data.events_valid || event_index >= current_data.event_count)
+    {
+        xSemaphoreGive(data_lock);
+        return;
+    }
+
+    const char *url = current_data.events[event_index].image_url;
+    if (loaded_event_image_url[0] && event_image_jpeg_buffer &&
+        event_image_jpeg_size && strcmp(loaded_event_image_url, url) == 0)
+    {
+        bool changed = !current_data.event_image_ready ||
+                       current_data.event_image_error ||
+                       current_data.event_image_index != event_index;
+        current_data.event_image_index = event_index;
+        current_data.event_image_ready = true;
+        current_data.event_image_error = false;
+        if (changed)
+            current_data.event_image_generation++;
+        xSemaphoreGive(data_lock);
+        return;
+    }
+    if (event_image_requested && strcmp(event_image_request_url, url) == 0)
+    {
+        event_image_requested_index = event_index;
+        current_data.event_image_index = event_index;
+        xSemaphoreGive(data_lock);
+        return;
+    }
+    if (current_data.event_image_error &&
+        current_data.event_image_index == event_index &&
+        strcmp(event_image_request_url, url) == 0)
+    {
+        xSemaphoreGive(data_lock);
+        return;
+    }
+
+    event_image_request_serial++;
+    event_image_requested = false;
+    current_data.event_image_ready = false;
+    current_data.event_image_error = false;
+    current_data.event_image_index = event_index;
+    current_data.event_image_generation++;
+    event_image_jpeg_size = 0;
+    loaded_event_image_url[0] = '\0';
+    snprintf(event_image_request_url, sizeof(event_image_request_url), "%s", url);
+
+#if BOARD_EVENT_IMAGE_MAX_BYTES >= 4
+    if (valid_event_image_url(url))
+    {
+        event_image_requested = true;
+        queue_request = true;
+    }
+    else
+    {
+        current_data.event_image_error = true;
+        ESP_LOGW(TAG, "Event %u has no supported image URL",
+                 (unsigned)event_index);
+    }
+#else
+    current_data.event_image_error = true;
+    ESP_LOGI(TAG, "Event images disabled for this board");
+#endif
+    xSemaphoreGive(data_lock);
+
+    if (queue_request)
+        xEventGroupSetBits(refresh_events, EVENT_IMAGE_BIT);
+}
+
+void data_release_event_image(void)
+{
+    if (!data_lock)
+        return;
+
+    xSemaphoreTake(data_lock, portMAX_DELAY);
+    event_image_request_serial++;
+    event_image_requested = false;
+    event_image_request_url[0] = '\0';
+    current_data.event_image_ready = false;
+    current_data.event_image_error = false;
+    current_data.event_image_index = 0;
+    current_data.event_image_generation++;
+    if (event_image_jpeg_in_use)
+    {
+        event_image_release_pending = true;
+    }
+    else
+    {
+        memory_free(event_image_jpeg_buffer);
+        event_image_jpeg_buffer = NULL;
+        event_image_jpeg_capacity = 0;
+        event_image_jpeg_size = 0;
+        loaded_event_image_url[0] = '\0';
+    }
+    xSemaphoreGive(data_lock);
+}
+
+const uint8_t *data_event_image_jpeg(size_t *size)
+{
+    if (!data_lock || !size)
+        return NULL;
+    xSemaphoreTake(data_lock, portMAX_DELAY);
+    const uint8_t *jpeg = current_data.event_image_ready
+                              ? event_image_jpeg_buffer
+                              : NULL;
+    *size = current_data.event_image_ready ? event_image_jpeg_size : 0;
+    xSemaphoreGive(data_lock);
+    return jpeg;
+}
+
+bool data_promote_prefetched_photo(void)
+{
+    if (!data_lock || !refresh_events)
+        return false;
+    bool prefetched = false;
+    xSemaphoreTake(data_lock, portMAX_DELAY);
+    photo_request_serial++;
+    photo_requested = false;
+    if (photo_prefetch_ready && !photo_jpeg_in_use &&
+        !photo_prefetch_jpeg_in_use)
+    {
+        uint8_t *old_buffer = photo_jpeg_buffer;
+        size_t old_capacity = photo_jpeg_capacity;
+        photo_jpeg_buffer = photo_prefetch_jpeg_buffer;
+        photo_jpeg_capacity = photo_prefetch_jpeg_capacity;
+        photo_jpeg_size = photo_prefetch_jpeg_size;
+        photo_prefetch_jpeg_buffer = old_buffer;
+        photo_prefetch_jpeg_capacity = old_capacity;
+        photo_prefetch_jpeg_size = 0;
+
+        current_data.photo_count = photo_prefetch_count;
+        current_data.photo_number = photo_prefetch_number;
+        current_data.photo_ready = true;
+        current_data.photo_error = false;
+        snprintf(current_data.photo_title, sizeof(current_data.photo_title),
+                 "%s", photo_prefetch_title);
+        snprintf(current_data.photo_date, sizeof(current_data.photo_date),
+                 "%s", photo_prefetch_date);
+        snprintf(last_photo_path, sizeof(last_photo_path), "%s",
+                 photo_prefetch_path);
+        photo_prefetch_ready = false;
+        photo_prefetch_path[0] = '\0';
+        photo_prefetch_title[0] = '\0';
+        photo_prefetch_date[0] = '\0';
+        current_data.photo_generation++;
+        prefetched = true;
+    }
+    photo_prefetch_serial++;
+    photo_prefetch_requested = false;
+    photo_prefetch_ready = false;
+    xSemaphoreGive(data_lock);
+    return prefetched;
+}
+
 void data_request_photo(void)
 {
     if (!data_lock || !refresh_events)
@@ -1878,6 +2385,9 @@ void data_request_photo(void)
     xSemaphoreTake(data_lock, portMAX_DELAY);
     photo_request_serial++;
     photo_requested = true;
+    photo_prefetch_serial++;
+    photo_prefetch_requested = false;
+    photo_prefetch_ready = false;
     current_data.photo_ready = false;
     current_data.photo_error = false;
     current_data.photo_number = 0;
@@ -1888,6 +2398,29 @@ void data_request_photo(void)
     xEventGroupSetBits(refresh_events, PHOTO_BIT);
 }
 
+void data_prefetch_next_photo(void)
+{
+    if (!data_lock || !refresh_events)
+        return;
+    bool queue_request = false;
+    xSemaphoreTake(data_lock, portMAX_DELAY);
+    if (current_data.photo_ready && !photo_requested &&
+        !photo_prefetch_requested && !photo_prefetch_ready &&
+        !photo_prefetch_jpeg_in_use)
+    {
+        photo_prefetch_serial++;
+        photo_prefetch_requested = true;
+        photo_prefetch_jpeg_size = 0;
+        photo_prefetch_path[0] = '\0';
+        photo_prefetch_title[0] = '\0';
+        photo_prefetch_date[0] = '\0';
+        queue_request = true;
+    }
+    xSemaphoreGive(data_lock);
+    if (queue_request)
+        xEventGroupSetBits(refresh_events, PHOTO_PREFETCH_BIT);
+}
+
 void data_release_photo(void)
 {
     if (!data_lock)
@@ -1895,6 +2428,9 @@ void data_release_photo(void)
     xSemaphoreTake(data_lock, portMAX_DELAY);
     photo_request_serial++;
     photo_requested = false;
+    photo_prefetch_serial++;
+    photo_prefetch_requested = false;
+    photo_prefetch_ready = false;
     current_data.photo_ready = false;
     current_data.photo_error = false;
     current_data.photo_generation++;
@@ -1911,6 +2447,20 @@ void data_release_photo(void)
         photo_jpeg_capacity = 0;
         photo_jpeg_size = 0;
     }
+    if (photo_prefetch_jpeg_in_use)
+    {
+        photo_prefetch_release_pending = true;
+    }
+    else
+    {
+        memory_free(photo_prefetch_jpeg_buffer);
+        photo_prefetch_jpeg_buffer = NULL;
+        photo_prefetch_jpeg_capacity = 0;
+        photo_prefetch_jpeg_size = 0;
+    }
+    photo_prefetch_path[0] = '\0';
+    photo_prefetch_title[0] = '\0';
+    photo_prefetch_date[0] = '\0';
     xSemaphoreGive(data_lock);
 }
 

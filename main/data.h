@@ -14,6 +14,7 @@
 #define DATA_EVENT_PLACE_LENGTH 48
 #define DATA_EVENT_DESCRIPTION_LENGTH 120
 #define DATA_EVENT_URL_LENGTH 128
+#define DATA_EVENT_IMAGE_URL_LENGTH 192
 #define DATA_EVENT_TIMES_PER_EVENT 4
 #define DATA_EVENT_TIME_LENGTH 6
 #define DATA_EVENT_TIMES_TEXT_LENGTH \
@@ -41,6 +42,7 @@ typedef struct {
     char place[DATA_EVENT_PLACE_LENGTH];
     char description[DATA_EVENT_DESCRIPTION_LENGTH];
     char url[2 * DATA_EVENT_URL_LENGTH];
+    char image_url[DATA_EVENT_IMAGE_URL_LENGTH];
     uint8_t day_offset;
     uint8_t time_count;
 } texel_event_t;
@@ -58,6 +60,8 @@ typedef struct {
     bool tide_valid;
     bool calendar_valid;
     bool events_valid;
+    bool event_image_ready;
+    bool event_image_error;
     bool from_cache;
     bool photo_ready;
     bool photo_error;
@@ -82,12 +86,19 @@ typedef struct {
     calendar_entry_t calendar_entries[DATA_CALENDAR_MAX_ENTRIES];
     char calendar_group_names[DATA_CALENDAR_GROUPS][DATA_CALENDAR_GROUP_NAME_LENGTH];
     uint8_t event_count;
+    uint8_t event_image_index;
+    uint32_t event_image_generation;
     texel_event_t events[DATA_EVENT_COUNT];
 } app_data_t;
 
 esp_err_t data_init(void);
 void data_snapshot(app_data_t *out);
 void data_request_refresh(void);
+void data_request_event_image(uint8_t event_index);
+void data_release_event_image(void);
+const uint8_t *data_event_image_jpeg(size_t *size);
+bool data_promote_prefetched_photo(void);
 void data_request_photo(void);
+void data_prefetch_next_photo(void);
 void data_release_photo(void);
 const uint8_t *data_photo_jpeg(size_t *size);

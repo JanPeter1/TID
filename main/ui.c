@@ -12,6 +12,7 @@
 #include "esp_sleep.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "german_font.h"
 #include "info_pages.h"
 #include "touch.h"
 #include "web_config.h"
@@ -255,6 +256,109 @@ static size_t utf8_sequence_length(const unsigned char *text)
     if ((text[0] & 0xF0) == 0xE0) return 3;
     if ((text[0] & 0xF8) == 0xF0) return 4;
     return 1;
+}
+
+static uint32_t utf8_codepoint(const unsigned char *text, size_t length)
+{
+    if (length == 1) return text[0];
+    if (length == 2) {
+        return ((uint32_t)(text[0] & 0x1F) << 6) |
+               (uint32_t)(text[1] & 0x3F);
+    }
+    if (length == 3) {
+        return ((uint32_t)(text[0] & 0x0F) << 12) |
+               ((uint32_t)(text[1] & 0x3F) << 6) |
+               (uint32_t)(text[2] & 0x3F);
+    }
+    if (length == 4) {
+        return ((uint32_t)(text[0] & 0x07) << 18) |
+               ((uint32_t)(text[1] & 0x3F) << 12) |
+               ((uint32_t)(text[2] & 0x3F) << 6) |
+               (uint32_t)(text[3] & 0x3F);
+    }
+    return 0xFFFD;
+}
+
+static size_t utf8_safe_length(const char *text)
+{
+    size_t length = utf8_sequence_length((const unsigned char *)text);
+    for (size_t i = 1; i < length; i++) {
+        if (!text[i]) return 1;
+    }
+    return length;
+}
+
+static uint16_t text_glyph_width(const char *text, size_t length)
+{
+    uint32_t codepoint = utf8_codepoint((const unsigned char *)text, length);
+    const char *next = text + length;
+    size_t next_length = *next ? utf8_safe_length(next) : 0;
+    uint32_t next_codepoint = next_length
+        ? utf8_codepoint((const unsigned char *)next, next_length) : 0;
+    return lv_font_get_glyph_width(&lv_font_german_12, codepoint,
+                                   next_codepoint);
+}
+
+static void draw_wrapped_text_width(const char *text, int x, int y,
+                                    int max_lines, int max_width,
+                                    uint16_t color, size_t page_offset)
+{
+    if (!text || !text[0]) {
+        display_text(x, y, "KEINE DATEN", COLOR_MUTED, 1);
+        return;
+    }
+    int line = 0;
+    const char *cursor = text;
+    for (size_t skipped = 0; *cursor && skipped < page_offset; skipped++) {
+        cursor += utf8_safe_length(cursor);
+    }
+    while (*cursor && line < max_lines) {
+        while (*cursor == ' ') cursor++;
+        if (!*cursor) break;
+
+        const char *scan = cursor;
+        const char *last_space = NULL;
+        const char *line_end = NULL;
+        const char *next_cursor = NULL;
+        int width = 0;
+        while (*scan && *scan != '\n') {
+            size_t length = utf8_safe_length(scan);
+            uint16_t glyph_width = text_glyph_width(scan, length);
+            if (width + glyph_width > max_width) {
+                if (last_space) {
+                    line_end = last_space;
+                    next_cursor = last_space + 1;
+                    while (*next_cursor == ' ') next_cursor++;
+                } else if (scan == cursor) {
+                    line_end = scan + length;
+                    next_cursor = line_end;
+                } else {
+                    line_end = scan;
+                    next_cursor = scan;
+                }
+                break;
+            }
+            width += glyph_width;
+            if (*scan == ' ') last_space = scan;
+            scan += length;
+        }
+        if (!line_end) {
+            line_end = scan;
+            next_cursor = *scan == '\n' ? scan + 1 : scan;
+        }
+
+        size_t bytes = (size_t)(line_end - cursor);
+        while (bytes && cursor[bytes - 1] == ' ') bytes--;
+        if (bytes) {
+            char buffer[140];
+            if (bytes >= sizeof(buffer)) bytes = sizeof(buffer) - 1;
+            memcpy(buffer, cursor, bytes);
+            buffer[bytes] = '\0';
+            display_text(x, y + line * 14, buffer, color, 1);
+        }
+        cursor = next_cursor;
+        line++;
+    }
 }
 
 static void draw_wrapped_text(const char *text, int x, int y, int max_lines,
@@ -919,10 +1023,24 @@ static void draw_page(const app_data_t *data, uint8_t timer_progress,
         draw_subpage_indicator(data);
         return;
     }
+    bool show_event_image = false;
+    bool event_image_error = false;
+    int event_status_y = 194;
     switch (active_page) {
     case PAGE_CURRENT:
         if (data->event_count && active_subpage[active_page] < data->event_count) {
             const texel_event_t *event = &data->events[active_subpage[active_page]];
+            bool downloaded_event_image = data->event_image_ready &&
+                data->event_image_index == active_subpage[active_page];
+            show_event_image = event->image_url[0] &&
+                (downloaded_event_image ||
+                 display_event_thumbnail_cached(event->image_url));
+            event_image_error = data->event_image_error &&
+                                data->event_image_index ==
+                                    active_subpage[active_page];
+            bool reserve_event_image = event->image_url[0] &&
+                                       !event_image_error;
+            if (reserve_event_image) event_status_y = 208;
             display_text(34, 40, event->day_offset ? "MORGEN AUF TEXEL" : "HEUTE AUF TEXEL",
                          COLOR_ORANGE, 1);
             char event_times[DATA_EVENT_TIMES_TEXT_LENGTH] = {0};
@@ -961,14 +1079,47 @@ static void draw_page(const app_data_t *data, uint8_t timer_progress,
                          event_times);
             }
             display_text(34, 56, event_date, COLOR_MUTED, 1);
-            draw_wrapped_text(event->title, 34, 76, 4, COLOR_WHITE, 0);
-            if (event->place[0]) {
-                display_text(34, 134, "ORT", COLOR_ORANGE, 1);
-                draw_wrapped_text(event->place, 34, 146, 2, COLOR_WHITE, 0);
+            if (reserve_event_image) {
+                draw_wrapped_text_width(event->title, 34, 76, 3, 164,
+                                        COLOR_WHITE, 0);
+            } else {
+                draw_wrapped_text(event->title, 34, 76, 4, COLOR_WHITE, 0);
             }
-            if (event->description[0]) {
-                draw_wrapped_text(event->description, 34,
-                                  event->place[0] ? 172 : 142, 3, COLOR_MUTED, 0);
+            if (reserve_event_image) {
+                display_fill_rect(200, 65, 84, 64, COLOR_PANEL);
+            }
+            if (show_event_image) {
+                size_t image_size = 0;
+                const uint8_t *image = downloaded_event_image
+                    ? data_event_image_jpeg(&image_size) : NULL;
+                esp_err_t err = display_draw_event_thumbnail(
+                    202, 67, event->image_url, image, image_size);
+                if (err != ESP_OK) {
+                    ESP_LOGE("ui", "Could not display event image: %s",
+                             esp_err_to_name(err));
+                    event_image_error = true;
+                }
+            }
+            if (reserve_event_image) {
+                if (event->place[0]) {
+                    display_text(34, 120, "ORT", COLOR_ORANGE, 1);
+                    draw_wrapped_text_width(event->place, 34, 132, 2, 164,
+                                            COLOR_WHITE, 0);
+                }
+                if (event->description[0]) {
+                    draw_wrapped_text(event->description, 34,
+                                      event->place[0] ? 162 : 134,
+                                      3, COLOR_MUTED, 0);
+                }
+            } else {
+                if (event->place[0]) {
+                    display_text(34, 134, "ORT", COLOR_ORANGE, 1);
+                    draw_wrapped_text(event->place, 34, 146, 2, COLOR_WHITE, 0);
+                }
+                if (event->description[0]) {
+                    draw_wrapped_text(event->description, 34,
+                                      event->place[0] ? 172 : 142, 3, COLOR_MUTED, 0);
+                }
             }
         } else if (data->events_valid) {
             display_text(34, 40, "HEUTE & MORGEN", COLOR_ORANGE, 1);
@@ -977,7 +1128,16 @@ static void draw_page(const app_data_t *data, uint8_t timer_progress,
             display_text(34, 40, "VERANSTALTUNGEN", COLOR_ORANGE, 1);
             display_text(34, 70, "VVV-DATEN WERDEN GELADEN", COLOR_WHITE, 1);
         }
-        display_text(34, 194, "QUELLE: TEXEL.NET", COLOR_MUTED, 1);
+        if (!show_event_image || event_image_error) {
+            const char *status = "QUELLE: TEXEL.NET";
+            if (event_image_error) {
+                status = "BILD NICHT VERFUEGBAR";
+            } else if (active_subpage[active_page] < data->event_count &&
+                       data->events[active_subpage[active_page]].image_url[0]) {
+                status = "BILD WIRD GELADEN";
+            }
+            display_text(34, event_status_y, status, COLOR_MUTED, 1);
+        }
         break;
     case PAGE_CALENDAR:
         draw_calendar(data);
@@ -1031,6 +1191,7 @@ static void ui_task(void *unused)
     bool previous_qr_visibility = false;
     bool previous_setup_visibility = false;
     bool previous_splash_visible = false;
+    bool previous_event_image_page_active = false;
     int previous_timer_second = -1;
     int previous_clock_minute = -1;
     bool previous_clock_valid = false;
@@ -1198,17 +1359,38 @@ static void ui_task(void *unused)
                             qr_visible != previous_qr_visibility ||
                             show_setup != previous_setup_visibility ||
                             memcmp(snapshot, previous, sizeof(*snapshot)) != 0;
+        bool event_image_page_active =
+            !splash_visible && !qr_visible && active_page == PAGE_CURRENT &&
+            snapshot->events_valid && active_subpage[PAGE_CURRENT] < snapshot->event_count;
         if (page_changed) {
             bool photo_page_changed = active_page == PAGE_PHOTOS &&
                 (active_page != previous_page ||
                  active_subpage[PAGE_PHOTOS] != previous_subpage);
             bool leaving_photo_page = previous_page == PAGE_PHOTOS &&
                                       active_page != PAGE_PHOTOS;
+            bool photo_prefetched = false;
             if (active_page != PAGE_PHOTOS) photo_request_pending = false;
-            if (photo_page_changed) photo_request_pending = true;
+            if (photo_page_changed) {
+                photo_prefetched = data_promote_prefetched_photo();
+                photo_request_pending = !photo_prefetched;
+                if (photo_prefetched) data_snapshot(snapshot);
+            }
             draw_page(snapshot, timer_progress, splash_visible);
-            if (photo_page_changed) data_request_photo();
+            if (photo_page_changed && !photo_prefetched) {
+                data_request_photo();
+            }
             if (leaving_photo_page) data_release_photo();
+            if (active_page == PAGE_PHOTOS && snapshot->photo_ready) {
+                data_prefetch_next_photo();
+            }
+            if (event_image_page_active) {
+                if (!display_event_thumbnail_cached(
+                        snapshot->events[active_subpage[PAGE_CURRENT]].image_url)) {
+                    data_request_event_image(active_subpage[PAGE_CURRENT]);
+                }
+            } else if (previous_event_image_page_active) {
+                data_release_event_image();
+            }
             if (snapshot->from_cache && !splash_visible) {
                 display_text_bg(146, 225, "CACHE", COLOR_ORANGE, COLOR_PANEL, 1);
             }
@@ -1230,6 +1412,7 @@ static void ui_task(void *unused)
             display_set_page_timer(timer_progress);
         }
         previous_timer_second = timer_progress;
+        previous_event_image_page_active = event_image_page_active;
         previous_clock_minute = clock_minute;
         previous_clock_valid = clock_valid;
         if (now - last_stack_report >= pdMS_TO_TICKS(60000)) {
