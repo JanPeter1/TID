@@ -662,9 +662,9 @@ typedef struct
 {
     char date[11];
     uint16_t time_minutes;
-    const char *title;
-    const char *place;
-    const char *slug;
+    char title[DATA_EVENT_TITLE_LENGTH];
+    char place[DATA_EVENT_PLACE_LENGTH];
+    char slug[DATA_EVENT_URL_LENGTH];
     uint8_t day_offset;
 } raw_texel_event_t;
 
@@ -747,9 +747,9 @@ static bool parse_event_response(const char *json, const char *today, const char
             snprintf(event.date, sizeof(event.date), "%.10s", date);
             if (!parse_event_time(date, &event.time_minutes))
                 continue;
-            event.title = title;
-            event.place = place;
-            event.slug = slug;
+            copy_event_field(event.title, sizeof(event.title), title);
+            copy_event_field(event.place, sizeof(event.place), place);
+            snprintf(event.slug, sizeof(event.slug), "%s", slug);
             event.day_offset = day_offset;
 
             bool duplicate = false;
@@ -758,8 +758,7 @@ static bool parse_event_response(const char *json, const char *today, const char
                 if (strcmp(raw_events[i].date, event.date) == 0 &&
                     raw_events[i].time_minutes == event.time_minutes &&
                     strcmp(raw_events[i].title, event.title) == 0 &&
-                    strcmp(raw_events[i].place ? raw_events[i].place : "",
-                           event.place ? event.place : "") == 0 &&
+                    strcmp(raw_events[i].place, event.place) == 0 &&
                     strcmp(raw_events[i].slug, event.slug) == 0)
                 {
                     duplicate = true;
@@ -804,7 +803,7 @@ static bool parse_event_response(const char *json, const char *today, const char
                           strcmp(previous->date, event->date) == 0 &&
                           strcmp(group_title, event->title) == 0 &&
                           strcmp(group_place ? group_place : "",
-                                 event->place ? event->place : "") == 0 &&
+                                 event->place) == 0 &&
                           strcmp(group_slug, event->slug) == 0;
         if (same_event && grouped_time_count < DATA_EVENT_TIMES_PER_EVENT)
         {
@@ -874,6 +873,75 @@ static void log_vvv_response(const char *response)
     }
 }
 
+#define VVV_API_PAGE_LIMIT 12
+
+static bool parse_event_response_accumulate(const char *json, const char *today, const char *tomorrow,
+                                            raw_texel_event_t *raw_events, size_t *raw_event_count,
+                                            size_t raw_event_capacity)
+{
+    cJSON *root = cJSON_Parse(json);
+    cJSON *data = root ? object_item(root, "data") : NULL;
+    cJSON *activities = data ? object_item(data, "activities") : NULL;
+    cJSON *hits = activities ? object_item(activities, "hits") : NULL;
+    if (!cJSON_IsArray(hits) || object_item(root, "errors"))
+    {
+        cJSON_Delete(root);
+        return false;
+    }
+
+    for (cJSON *hit = hits->child; hit && *raw_event_count < raw_event_capacity; hit = hit->next)
+    {
+        const char *title = json_string(hit, "name");
+        const char *slug = json_string(hit, "slug");
+        const char *place = json_string(hit, "place");
+        cJSON *timeslots = object_item(hit, "timeslots");
+        if (!title || !slug || !cJSON_IsArray(timeslots))
+            continue;
+
+        for (cJSON *slot = timeslots->child; slot && *raw_event_count < raw_event_capacity; slot = slot->next)
+        {
+            const char *date = json_string(slot, "startDateTime");
+            if (!date || strlen(date) < 16)
+                continue;
+            uint8_t day_offset;
+            if (strncmp(date, today, 10) == 0)
+                day_offset = 0;
+            else if (strncmp(date, tomorrow, 10) == 0)
+                day_offset = 1;
+            else
+                continue;
+
+            raw_texel_event_t event = {0};
+            snprintf(event.date, sizeof(event.date), "%.10s", date);
+            if (!parse_event_time(date, &event.time_minutes))
+                continue;
+            copy_event_field(event.title, sizeof(event.title), title);
+            copy_event_field(event.place, sizeof(event.place), place);
+            snprintf(event.slug, sizeof(event.slug), "%s", slug);
+            event.day_offset = day_offset;
+
+            bool duplicate = false;
+            for (size_t i = 0; i < *raw_event_count; i++)
+            {
+                if (strcmp(raw_events[i].date, event.date) == 0 &&
+                    raw_events[i].time_minutes == event.time_minutes &&
+                    strcmp(raw_events[i].title, event.title) == 0 &&
+                    strcmp(raw_events[i].place, event.place) == 0 &&
+                    strcmp(raw_events[i].slug, event.slug) == 0)
+                {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (!duplicate)
+                raw_events[(*raw_event_count)++] = event;
+        }
+    }
+
+    cJSON_Delete(root);
+    return true;
+}
+
 static void fetch_events(void)
 {
     char today[11] = {0};
@@ -904,7 +972,8 @@ static void fetch_events(void)
     }
     cJSON_AddStringToObject(request, "operationName", "ActivitySearch");
     cJSON_AddStringToObject(request, "query", query);
-    cJSON_AddNumberToObject(variables, "limit", DATA_EVENT_COUNT);
+    // Keep the API page size aligned with the number of events this board stores.
+    cJSON_AddNumberToObject(variables, "limit", VVV_API_PAGE_LIMIT);
     // Randomize order. The random seed used is the current date, so the order will be identical between pageloads and between users, but change daily.
     cJSON_AddStringToObject(variables, "order", "RANDOM"); // RANDOM, TIMESLOTS_ASC, REVIEW_RATING_DESC
     cJSON_AddStringToObject(params, "startDate", today);
@@ -916,22 +985,39 @@ static void fetch_events(void)
     cJSON_AddStringToObject(variables, "endDate", tomorrow);
     cJSON_AddItemToObject(request, "variables", variables);
     cJSON_AddItemToObject(request, "offset", cJSON_CreateNumber(0));
-    for (int i = 0; i < 1; i++)
+
+    // Accumulate raw events from all pages
+    const size_t raw_event_capacity = (size_t)DATA_EVENT_COUNT * DATA_EVENT_TIMES_PER_EVENT;
+    raw_texel_event_t *raw_events =
+        memory_alloc(raw_event_capacity * sizeof(*raw_events), MEMORY_ALLOC_LARGE);
+    if (!raw_events)
     {
-        ESP_LOGI(TAG, "Fetching VVV events, page %d", i + 1);
-        cJSON_ReplaceItemInObject(request, "offset", cJSON_CreateNumber(i * DATA_EVENT_COUNT));
+        ESP_LOGE(TAG, "Could not allocate VVV raw event array");
+        cJSON_Delete(request);
+        cJSON_Delete(variables);
+        cJSON_Delete(params);
+        return;
+    }
+    memset(raw_events, 0, raw_event_capacity * sizeof(*raw_events));
+    size_t raw_event_count = 0;
+
+    int total_pages = (DATA_EVENT_COUNT + VVV_API_PAGE_LIMIT - 1) / VVV_API_PAGE_LIMIT;
+    for (int page = 0; page < total_pages; page++)
+    {
+        ESP_LOGI(TAG, "Fetching VVV events, page %d of %d", page + 1, total_pages);
+        cJSON_ReplaceItemInObject(request, "offset", cJSON_CreateNumber(page * VVV_API_PAGE_LIMIT));
         char *body = cJSON_PrintUnformatted(request);
         if (!body)
         {
             ESP_LOGE(TAG, "Could not serialize VVV query");
-            return;
+            break;
         }
         char *response = memory_alloc(EVENT_RESPONSE_LIMIT, MEMORY_ALLOC_LARGE);
         if (!response)
         {
             ESP_LOGE(TAG, "Could not allocate VVV response buffer");
             free(body);
-            return;
+            break;
         }
         memset(response, 0, EVENT_RESPONSE_LIMIT);
         bool response_ok = http_post_json("https://texel-gateway.travelbase.nl/graphql",
@@ -939,15 +1025,109 @@ static void fetch_events(void)
         log_vvv_response(response);
         if (response_ok)
         {
-            if (!parse_event_response(response, today, tomorrow))
+            if (!parse_event_response_accumulate(response, today, tomorrow, raw_events, &raw_event_count, raw_event_capacity))
             {
                 ESP_LOGW(TAG, "VVV GraphQL response did not contain event data");
             }
+        }
+        else
+        {
+            ESP_LOGW(TAG, "VVV request failed on page %d", page + 1);
         }
         memory_free(response);
         free(body);
     }
     cJSON_Delete(request);
+
+    // Now sort and group all accumulated raw events into final events
+    if (raw_event_count > 0)
+    {
+        // Sort by date, then time
+        for (size_t i = 1; i < raw_event_count; i++)
+        {
+            raw_texel_event_t event = raw_events[i];
+            size_t insert_at = i;
+            while (insert_at > 0)
+            {
+                raw_texel_event_t *previous = &raw_events[insert_at - 1];
+                int date_order = strcmp(previous->date, event.date);
+                if (date_order < 0 || (date_order == 0 && previous->time_minutes <= event.time_minutes))
+                {
+                    break;
+                }
+                raw_events[insert_at] = *previous;
+                insert_at--;
+            }
+            raw_events[insert_at] = event;
+        }
+
+        // Group into final events (same logic as parse_event_response)
+        texel_event_t *events = calloc(DATA_EVENT_COUNT, sizeof(*events));
+        if (events)
+        {
+            size_t event_count = 0;
+            uint8_t grouped_time_count = 0;
+            const char *group_title = NULL;
+            const char *group_place = NULL;
+            const char *group_slug = NULL;
+            for (size_t i = 0; i < raw_event_count; i++)
+            {
+                const raw_texel_event_t *event = &raw_events[i];
+                texel_event_t *previous = event_count ? &events[event_count - 1] : NULL;
+                bool same_event = previous &&
+                                  strcmp(previous->date, event->date) == 0 &&
+                                  strcmp(group_title, event->title) == 0 &&
+                                  strcmp(group_place ? group_place : "", event->place) == 0 &&
+                                  strcmp(group_slug, event->slug) == 0;
+                if (same_event && grouped_time_count < DATA_EVENT_TIMES_PER_EVENT)
+                {
+                    previous->times[grouped_time_count] = event->time_minutes;
+                    grouped_time_count++;
+                    previous->time_count = grouped_time_count;
+                }
+                else if (event_count < (size_t)DATA_EVENT_COUNT)
+                {
+                    texel_event_t *group = &events[event_count++];
+                    snprintf(group->date, sizeof(group->date), "%s", event->date);
+                    group->times[0] = event->time_minutes;
+                    copy_event_field(group->title, sizeof(group->title), event->title);
+                    copy_event_field(group->place, sizeof(group->place), event->place);
+                    snprintf(group->url, sizeof(group->url),
+                             "https://www.texel.net/de/aktivitat/%s/", event->slug);
+                    group->day_offset = event->day_offset;
+                    group->time_count = 1;
+                    grouped_time_count = 1;
+                    group_title = event->title;
+                    group_place = event->place;
+                    group_slug = event->slug;
+                }
+                else
+                {
+                    break;
+                }
+            }
+
+            xSemaphoreTake(data_lock, portMAX_DELAY);
+            memset(current_data.events, 0, sizeof(current_data.events));
+            memcpy(current_data.events, events, event_count * sizeof(*events));
+            current_data.event_count = (uint8_t)event_count;
+            current_data.events_valid = true;
+            current_data.from_cache = false;
+            xSemaphoreGive(data_lock);
+            free(events);
+            ESP_LOGI(TAG, "Parsed %u VVV events for today and tomorrow (from %u raw events across %d pages)",
+                     (unsigned)event_count, (unsigned)raw_event_count, total_pages);
+        }
+        else
+        {
+            ESP_LOGE(TAG, "Could not allocate VVV event array");
+        }
+    }
+    else
+    {
+        ESP_LOGW(TAG, "No VVV events found for today and tomorrow");
+    }
+    memory_free(raw_events);
 }
 
 static bool parse_weather(const char *json)

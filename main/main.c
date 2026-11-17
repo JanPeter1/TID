@@ -15,7 +15,7 @@ void app_main(void)
     tzset();
 
     ESP_ERROR_CHECK(display_init());
-    ESP_ERROR_CHECK(touch_init());
+    ESP_ERROR_CHECK(touch_driver_init());
     ESP_ERROR_CHECK(config_init());
     ESP_ERROR_CHECK(web_config_start());
     ESP_ERROR_CHECK(data_init());

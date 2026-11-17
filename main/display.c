@@ -130,14 +130,14 @@ static void lvgl_touch_read(lv_indev_t *indev, lv_indev_data_t *data)
     (void)indev;
     int x = 0;
     int y = 0;
-    touch_pressed = touch_read(&x, &y);
+    touch_pressed = touch_driver_read(&x, &y);
     if (touch_pressed) {
         touch_x = x;
         touch_y = y;
     }
     data->state = touch_pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
-    data->point.x = UI_SCALE_X(touch_x);
-    data->point.y = UI_SCALE_Y(touch_y);
+    data->point.x = touch_x;
+    data->point.y = touch_y;
 }
 
 esp_err_t display_init(void)
@@ -158,10 +158,18 @@ esp_err_t display_init(void)
     lv_display_set_color_format(lv_display, LV_COLOR_FORMAT_RGB565_SWAPPED);
     size_t buffer_size = (size_t)BOARD_DISPLAY_WIDTH *
                          BOARD_DISPLAY_BUFFER_ROWS * sizeof(uint16_t);
-    display_buffer = memory_alloc(buffer_size, MEMORY_ALLOC_DMA);
+    memory_allocation_t allocation = MEMORY_ALLOC_DMA;
+    lv_display_render_mode_t render_mode = LV_DISPLAY_RENDER_MODE_PARTIAL;
+#if CONFIG_TID_BOARD_JC3248W535C
+    buffer_size = (size_t)BOARD_DISPLAY_WIDTH * BOARD_DISPLAY_HEIGHT *
+                  sizeof(uint16_t);
+    allocation = MEMORY_ALLOC_LARGE;
+    render_mode = LV_DISPLAY_RENDER_MODE_FULL;
+#endif
+    display_buffer = memory_alloc(buffer_size, allocation);
     if (!display_buffer) return ESP_ERR_NO_MEM;
     lv_display_set_buffers(lv_display, display_buffer, NULL, buffer_size,
-                           LV_DISPLAY_RENDER_MODE_PARTIAL);
+                           render_mode);
     lv_display_set_flush_cb(lv_display, flush_display);
     ESP_RETURN_ON_ERROR(display_hw_init(lv_display), TAG,
                         "initialize display hardware");
@@ -176,8 +184,13 @@ esp_err_t display_init(void)
     lv_indev_set_display(touch_indev, lv_display);
     lv_indev_set_read_cb(touch_indev, lvgl_touch_read);
     lv_refr_now(lv_display);
+#if CONFIG_TID_BOARD_JC3248W535C
+    ESP_LOGI(TAG, "%s ready at %ux%u with LVGL full rendering", BOARD_NAME,
+             BOARD_DISPLAY_WIDTH, BOARD_DISPLAY_HEIGHT);
+#else
     ESP_LOGI(TAG, "%s ready at %ux%u with LVGL partial rendering", BOARD_NAME,
              BOARD_DISPLAY_WIDTH, BOARD_DISPLAY_HEIGHT);
+#endif
     return ESP_OK;
 }
 
@@ -535,8 +548,7 @@ esp_err_t display_draw_image(int x, int y, const lv_image_dsc_t *image)
     return ESP_OK;
 }
 
-static esp_err_t draw_jpeg(int x, int y, const uint8_t *data, size_t size,
-                           bool scale_to_display)
+static esp_err_t draw_jpeg(int x, int y, const uint8_t *data, size_t size)
 {
     if (!screen || !data || size < 4 || data[0] != 0xFF || data[1] != 0xD8) {
         return ESP_ERR_INVALID_ARG;
@@ -547,23 +559,17 @@ static esp_err_t draw_jpeg(int x, int y, const uint8_t *data, size_t size,
     if (!object) return ESP_ERR_NO_MEM;
     lv_image_set_src(object, PHOTO_FS_PATH);
     set_scaled_position(object, x, y);
-    if (scale_to_display) {
-        lv_image_set_scale_x(object,
-            (uint32_t)(UI_SCALE_X_NUM * LV_SCALE_NONE / UI_SCALE_X_DEN));
-        lv_image_set_scale_y(object,
-            (uint32_t)(UI_SCALE_Y_NUM * LV_SCALE_NONE / UI_SCALE_Y_DEN));
-    }
     return ESP_OK;
 }
 
 esp_err_t display_draw_jpeg(int x, int y, const uint8_t *data, size_t size)
 {
-    return draw_jpeg(x, y, data, size, true);
+    return draw_jpeg(x, y, data, size);
 }
 
 esp_err_t display_draw_photo_jpeg(int x, int y, const uint8_t *data, size_t size)
 {
-    return draw_jpeg(x, y, data, size, false);
+    return draw_jpeg(x, y, data, size);
 }
 
 static const lv_font_t *font_for_scale(uint8_t scale)

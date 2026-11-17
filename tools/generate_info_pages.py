@@ -203,7 +203,7 @@ def image_data(image_path):
     return data
 
 
-def encode_splash_image(image_path):
+def encode_splash_image(image_path, width, height):
     try:
         from PIL import Image, ImageOps
 
@@ -211,7 +211,7 @@ def encode_splash_image(image_path):
             image = ImageOps.exif_transpose(source).convert("RGB")
             image = ImageOps.fit(
                 image,
-                (SPLASH_WIDTH, SPLASH_HEIGHT),
+                (width, height),
                 method=Image.Resampling.LANCZOS,
             )
         output = io.BytesIO()
@@ -223,7 +223,7 @@ def encode_splash_image(image_path):
         raise InputError(f"could not process splash image {str(image_path)!r}: {error}") from error
 
 
-def generate(pages, asset_root, splash_image_path):
+def generate(pages, asset_root, splash_image_path, splash_width, splash_height):
     image_names = []
     image_bytes = {}
     image_sources = {}
@@ -255,7 +255,9 @@ def generate(pages, asset_root, splash_image_path):
         "",
     ]
 
-    splash_image = encode_splash_image(splash_image_path)
+    splash_image = encode_splash_image(
+        splash_image_path, splash_width, splash_height
+    )
     output.append("const uint8_t splash_image_data[] = {")
     for offset in range(0, len(splash_image), 16):
         chunk = splash_image[offset:offset + 16]
@@ -319,11 +321,19 @@ def main():
     parser.add_argument("--assets", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--splash-image", required=True, type=Path)
+    parser.add_argument("--splash-width", type=int, default=SPLASH_WIDTH)
+    parser.add_argument("--splash-height", type=int, default=SPLASH_HEIGHT)
     args = parser.parse_args()
 
     try:
         pages = parse_pages(args.input)
-        generated = generate(pages, args.assets, args.splash_image)
+        generated = generate(
+            pages,
+            args.assets,
+            args.splash_image,
+            args.splash_width,
+            args.splash_height,
+        )
         write_if_changed(args.output, generated.encode("utf-8"))
     except (InputError, OSError) as error:
         print(f"info page generation failed: {error}", file=sys.stderr)

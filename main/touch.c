@@ -21,7 +21,7 @@ static bool reported_touch;
 #if CONFIG_TID_BOARD_CYD
 static spi_device_handle_t touch_device;
 
-esp_err_t touch_init(void)
+esp_err_t touch_driver_init(void)
 {
     spi_bus_config_t bus = {
         .mosi_io_num = BOARD_TOUCH_PIN_MOSI,
@@ -79,7 +79,7 @@ static int clamp_map(int value, int minimum, int maximum, int extent)
     return (value - minimum) * (extent - 1) / (maximum - minimum);
 }
 
-bool touch_read(int *x, int *y)
+bool touch_driver_read(int *x, int *y)
 {
     if (!x || !y || gpio_get_level(BOARD_TOUCH_PIN_IRQ) != 0) {
         reported_touch = false;
@@ -115,7 +115,17 @@ static i2c_master_bus_handle_t touch_i2c_bus;
 static esp_lcd_panel_io_handle_t touch_io;
 static esp_lcd_touch_handle_t touch_controller;
 
-esp_err_t touch_init(void)
+static void bsp_touch_process_points_cb(esp_lcd_touch_handle_t tp, uint16_t *x, uint16_t *y, uint16_t *strength, uint8_t *point_num, uint8_t max_point_num)
+{
+    uint16_t tmp;
+    for (int i = 0; i < *point_num; i++) {
+        tmp = x[i];
+        x[i] = y[i];
+        y[i] = tp->config.x_max - tmp;
+    }
+}
+
+esp_err_t touch_driver_init(void)
 {
     i2c_master_bus_config_t bus_config = {
         .i2c_port = BOARD_TOUCH_I2C_PORT,
@@ -134,30 +144,22 @@ esp_err_t touch_init(void)
                                                  &touch_io),
                         TAG, "create AXS15231B touch IO");
     esp_lcd_touch_config_t config = {
-        .x_max = BOARD_DISPLAY_WIDTH,
-        .y_max = BOARD_DISPLAY_HEIGHT,
-        .rst_gpio_num = GPIO_NUM_NC,
-        .int_gpio_num = BOARD_TOUCH_PIN_IRQ,
+        .x_max = 320,  // Native panel resolution (portrait)
+        .y_max = 480,
+        .rst_gpio_num = BOARD_TFT_PIN_RST,  // Shared with LCD reset
+        .int_gpio_num = BOARD_TOUCH_PIN_INT,  // -1 (not used)
+        .process_coordinates = bsp_touch_process_points_cb,
         .levels = {.reset = 0, .interrupt = 0},
-        .flags = {.swap_xy = true, .mirror_x = false, .mirror_y = true},
+        .flags = {.swap_xy = 0, .mirror_x = 0, .mirror_y = 0},
     };
     ESP_RETURN_ON_ERROR(esp_lcd_touch_new_i2c_axs15231b(
                             touch_io, &config, &touch_controller),
                         TAG, "initialize AXS15231B touch controller");
-
-    gpio_config_t irq_config = {
-        .pin_bit_mask = 1ULL << BOARD_TOUCH_PIN_IRQ,
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_ENABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    ESP_RETURN_ON_ERROR(gpio_config(&irq_config), TAG, "configure touch IRQ");
     ESP_LOGI(TAG, "AXS15231B capacitive touch ready");
     return ESP_OK;
 }
 
-bool touch_read(int *x, int *y)
+bool touch_driver_read(int *x, int *y)
 {
     if (!x || !y) {
         reported_touch = false;
@@ -193,8 +195,12 @@ bool touch_read(int *x, int *y)
 }
 #endif
 
-esp_err_t touch_enable_deep_sleep_wakeup(void)
+esp_err_t touch_driver_enable_deep_sleep_wakeup(void)
 {
+#if CONFIG_TID_BOARD_CYD
     if (gpio_get_level(BOARD_TOUCH_PIN_IRQ) == 0) return ESP_ERR_INVALID_STATE;
     return esp_sleep_enable_ext0_wakeup(BOARD_TOUCH_PIN_IRQ, 0);
+#else
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
 }

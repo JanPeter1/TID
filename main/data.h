@@ -40,7 +40,7 @@ typedef struct {
     char title[DATA_EVENT_TITLE_LENGTH];
     char place[DATA_EVENT_PLACE_LENGTH];
     char description[DATA_EVENT_DESCRIPTION_LENGTH];
-    char url[DATA_EVENT_URL_LENGTH];
+    char url[2 * DATA_EVENT_URL_LENGTH];
     uint8_t day_offset;
     uint8_t time_count;
 } texel_event_t;

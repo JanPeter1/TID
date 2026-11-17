@@ -1148,7 +1148,7 @@ static void ui_task(void *unused)
             last_auto_advance = now;
         }
         if (sleep_pending && !touched) {
-            esp_err_t err = touch_enable_deep_sleep_wakeup();
+            esp_err_t err = touch_driver_enable_deep_sleep_wakeup();
             if (err != ESP_OK) {
                 ESP_LOGE("ui", "Could not enable touch wakeup: %s", esp_err_to_name(err));
                 sleep_pending = false;
