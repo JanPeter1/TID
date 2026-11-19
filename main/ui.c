@@ -14,6 +14,7 @@
 #include "freertos/task.h"
 #include "german_font.h"
 #include "info_pages.h"
+#include "ota.h"
 #include "touch.h"
 #include "web_config.h"
 #include "memory.h"
@@ -223,6 +224,22 @@ static void draw_setup_icon(int x, int y, uint16_t color)
     display_fill_rect(x + 3, y + 3, 2, 2, color);
 }
 
+static void draw_ota_status(int x, int y)
+{
+    ota_status_t status = ota_get_status();
+    if (status == OTA_STATUS_IDLE || status == OTA_STATUS_SUCCESS) return;
+    const char *text = NULL;
+    switch (status) {
+        case OTA_STATUS_CHECKING: text = "OTA: PRUEFE"; break;
+        case OTA_STATUS_UPDATE_AVAILABLE: text = "OTA: UPDATE"; break;
+        case OTA_STATUS_DOWNLOADING: text = "OTA: DOWNLOAD"; break;
+        case OTA_STATUS_WRITING: text = "OTA: WRITE"; break;
+        case OTA_STATUS_FAILED: text = "OTA: FEHLER"; break;
+        default: text = "OTA"; break;
+    }
+    display_text_bg(x, y, text, COLOR_ORANGE, COLOR_PANEL, 1);
+}
+
 static void draw_status(uint8_t timer_progress)
 {
     display_fill_rect(0, 224, DISPLAY_WIDTH, 16, COLOR_PANEL);
@@ -242,6 +259,7 @@ static void draw_status(uint8_t timer_progress)
     uint16_t wifi_color = !config_wifi_connected() ? 0xF800
         : rssi >= -60 ? COLOR_GREEN : rssi >= -75 ? 0xFFE0 : 0xF800;
     draw_wifi_icon(186, 228, wifi_color, rssi);
+    draw_ota_status(210, 228);
     if (setup_credentials_visible && xTaskGetTickCount() < setup_visible_until) {
         display_fill_rect(0, 194, DISPLAY_WIDTH, 30, COLOR_ORANGE);
         display_text_bg(4, 194, config_ap_ssid(), COLOR_BACKGROUND, COLOR_ORANGE, 1);

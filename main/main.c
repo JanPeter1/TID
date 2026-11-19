@@ -5,6 +5,7 @@
 #include "data.h"
 #include "display.h"
 #include "esp_err.h"
+#include "ota.h"
 #include "touch.h"
 #include "ui.h"
 #include "web_config.h"
@@ -19,5 +20,6 @@ void app_main(void)
     ESP_ERROR_CHECK(config_init());
     ESP_ERROR_CHECK(web_config_start());
     ESP_ERROR_CHECK(data_init());
+    ESP_ERROR_CHECK(ota_init());
     ESP_ERROR_CHECK(ui_start());
 }
