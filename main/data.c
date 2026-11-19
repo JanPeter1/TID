@@ -1142,7 +1142,7 @@ static void fetch_events(void)
     }
 static const char query[] =
     "query ActivitySearch($params: ActivitySearchParamsInput!, $limit: Int, "
-    "$offset: Int, $order: ActivitySearchOrderEnum!, $lang: String!, $startDate: String!, "
+    "$offset: Int, $order: ActivitySearchOrderEnum!, $startDate: String!, "
     "$endDate: String!) { activities(params: $params, limit: $limit, "
     "offset: $offset, order: $order) { ... on ActivitySearchResult { "
     "totalHits hits { ... on Activity { name slug place "
@@ -1171,7 +1171,6 @@ static const char query[] =
     cJSON_AddItemToObject(params, "targetAudiences", cJSON_CreateArray());
     cJSON_AddItemToObject(params, "themeSlugs", cJSON_CreateArray());
     cJSON_AddItemToObject(variables, "params", params);
-    cJSON_AddStringToObject(variables, "lang", "de");
     cJSON_AddStringToObject(variables, "startDate", today);
     cJSON_AddStringToObject(variables, "endDate", tomorrow);
     cJSON_AddItemToObject(request, "variables", variables);
