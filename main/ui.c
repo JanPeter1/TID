@@ -236,7 +236,7 @@ static void draw_status(uint8_t timer_progress)
     int rssi = config_wifi_rssi();
     uint16_t wifi_color = !config_wifi_connected() ? 0xF800
         : rssi >= -60 ? COLOR_GREEN : rssi >= -75 ? 0xFFE0 : 0xF800;
-    draw_wifi_icon(186, 232, wifi_color, rssi);
+    draw_wifi_icon(186, 228, wifi_color, rssi);
     if (setup_credentials_visible && xTaskGetTickCount() < setup_visible_until) {
         display_fill_rect(0, 194, DISPLAY_WIDTH, 30, COLOR_ORANGE);
         display_text_bg(4, 194, config_ap_ssid(), COLOR_BACKGROUND, COLOR_ORANGE, 1);
@@ -246,12 +246,12 @@ static void draw_status(uint8_t timer_progress)
         setup_credentials_visible = false;
     }
     if (qr_visible) {
-        draw_close_icon(242, 232);
+        draw_close_icon(242, 228);
     } else {
-        draw_qr_icon(242, 232);
+        draw_qr_icon(242, 228);
     }
-    draw_sleep_icon(270, 232);
-    draw_setup_icon(298, 232,
+    draw_sleep_icon(270, 228);
+    draw_setup_icon(298, 228,
                     config_setup_ap_active() ? COLOR_ORANGE : COLOR_WHITE);
 }
 
@@ -1283,14 +1283,14 @@ static void ui_task(void *unused)
                     }
                 }
             }
-            if (touched && !was_touched && y >= 224 && x >= 226 && x < 258) {
+            if (touched && !was_touched && y >= 228 && x >= 226 && x < 258) {
                 qr_visible = !qr_visible;
             }
-            if (touched && !was_touched && y >= 224 && x >= 258 && x < 290) {
+            if (touched && !was_touched && y >= 228 && x >= 258 && x < 290) {
                 sleep_pending = true;
                 ESP_LOGI("ui", "Entering deep sleep after touch release");
             }
-            if (touched && !was_touched && y >= 224 && x >= 290) {
+            if (touched && !was_touched && y >= 228 && x >= 290) {
                 esp_err_t err = config_start_setup_ap();
                 if (err == ESP_OK) {
                     setup_credentials_visible = true;
