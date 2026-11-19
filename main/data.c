@@ -833,6 +833,22 @@ static void copy_event_field(char *destination, size_t size, const char *source)
     memcpy(destination, source, copy_length);
     destination[copy_length] = '\0';
     html_to_text(destination);
+    /* Replace problematic Unicode dashes with plain hyphen-minus.
+       En dash (U+2013): 0xE2 0x80 0x9C, Em dash (U+2014): 0xE2 0x80 0x9D. */
+    for (char *p = destination; *p; )
+    {
+        if ((unsigned char)p[0] == 0xE2 && p[1] == 0x80 &&
+            (p[2] == 0x9C || p[2] == 0x9D || p[2] == 0x9E))
+        {
+            /* Shift remaining bytes left by 2 (replace 3-byte sequence with 1-byte '-') */
+            memmove(p, p + 2, strlen(p + 2) + 1);
+            *p = '-';
+        }
+        else
+        {
+            p++;
+        }
+    }
 }
 
 typedef struct
