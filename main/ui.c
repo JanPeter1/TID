@@ -245,14 +245,14 @@ static void draw_status(uint8_t timer_progress)
     } else {
         setup_credentials_visible = false;
     }
-    if (qr_visible) {
-        draw_close_icon(242, 228);
-    } else {
-        draw_qr_icon(242, 228);
-    }
-    draw_sleep_icon(270, 228);
-    draw_setup_icon(298, 228,
+    draw_setup_icon(242, 228,
                     config_setup_ap_active() ? COLOR_ORANGE : COLOR_WHITE);
+    draw_sleep_icon(270, 228);
+    if (qr_visible) {
+        draw_close_icon(298, 228);
+    } else {
+        draw_qr_icon(298, 228);
+    }
 }
 
 static size_t utf8_sequence_length(const unsigned char *text)
@@ -1284,13 +1284,6 @@ static void ui_task(void *unused)
                 }
             }
             if (touched && !was_touched && y >= 228 && x >= 226 && x < 258) {
-                qr_visible = !qr_visible;
-            }
-            if (touched && !was_touched && y >= 228 && x >= 258 && x < 290) {
-                sleep_pending = true;
-                ESP_LOGI("ui", "Entering deep sleep after touch release");
-            }
-            if (touched && !was_touched && y >= 228 && x >= 290) {
                 esp_err_t err = config_start_setup_ap();
                 if (err == ESP_OK) {
                     setup_credentials_visible = true;
@@ -1299,6 +1292,13 @@ static void ui_task(void *unused)
                     ESP_LOGE("ui", "Could not start setup AP: %s",
                              esp_err_to_name(err));
                 }
+            }
+            if (touched && !was_touched && y >= 228 && x >= 258 && x < 290) {
+                sleep_pending = true;
+                ESP_LOGI("ui", "Entering deep sleep after touch release");
+            }
+            if (touched && !was_touched && y >= 228 && x >= 290) {
+                qr_visible = !qr_visible;
             }
         }
         was_touched = touched;
