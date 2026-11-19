@@ -9,8 +9,8 @@ from pathlib import Path
 
 from PIL import Image, ImageOps
 
-IMAGE_WIDTH = 80
-IMAGE_HEIGHT = 60
+IMAGE_WIDTH = 108
+IMAGE_HEIGHT = 81
 MAX_LINES = 10
 SPLASH_WIDTH = 320
 SPLASH_HEIGHT = 240
@@ -97,7 +97,7 @@ def wrap_page(page):
 
         while words:
             prefix = first_prefix
-            width = 24 if page["image"] and len(rows) < 5 else 38
+            width = 24 if page["image"] and len(rows) < 6 else 38
             available = width - len(prefix)
             line_words = []
             used = 0

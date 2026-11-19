@@ -20,8 +20,8 @@
 #define LVGL_LINE_CAPACITY 256
 #define PHOTO_FS_LETTER 'P'
 #define PHOTO_FS_PATH "P:photo.jpg"
-#define EVENT_THUMBNAIL_WIDTH 80
-#define EVENT_THUMBNAIL_HEIGHT 60
+#define EVENT_THUMBNAIL_WIDTH 108
+#define EVENT_THUMBNAIL_HEIGHT 81
 #define EVENT_THUMBNAIL_PIXEL_COUNT \
     (EVENT_THUMBNAIL_WIDTH * EVENT_THUMBNAIL_HEIGHT)
 #define EVENT_THUMBNAIL_BYTES \
@@ -712,6 +712,14 @@ esp_err_t display_draw_event_thumbnail(int x, int y, const char *url,
     if (entry) return display_draw_image(x, y, &entry->image);
     if (!data || size < 4 || data[0] != 0xFF || data[1] != 0xD8) {
         return ESP_ERR_NOT_FOUND;
+    }
+
+    /* free any previously cached thumbnail to keep heap usage minimal */
+    for (size_t i = 0; i < DATA_EVENT_COUNT; i++) {
+        if (event_thumbnail_cache[i].pixels) {
+            memory_free(event_thumbnail_cache[i].pixels);
+            event_thumbnail_cache[i].pixels = NULL;
+        }
     }
 
     uint16_t *pixels = memory_alloc(EVENT_THUMBNAIL_BYTES, MEMORY_ALLOC_LARGE);

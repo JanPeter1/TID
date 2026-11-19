@@ -25,6 +25,12 @@
 #define COLOR_ORANGE 0xFD20
 #define COLOR_GREEN 0x07E0
 #define COLOR_WHITE 0xFFFF
+#define IMAGE_SLOT_TRAY_X 176
+#define IMAGE_SLOT_TRAY_Y 54
+#define IMAGE_SLOT_TRAY_WIDTH 112
+#define IMAGE_SLOT_TRAY_HEIGHT 85
+#define IMAGE_SLOT_X 184          /* (176 + (112‑96)/2)  – centered */
+#define IMAGE_SLOT_Y 56           /* (54 + (85‑81)/2)   – centered */
 #define PAGE_ROTATE_INTERVAL_MS 60000
 #define SPLASH_DURATION_MS 60000
 
@@ -985,8 +991,11 @@ static void draw_info_page(void)
     const info_page_t *page = &info_pages[active_subpage[PAGE_INFO]];
     display_text(34, 40, page->title, COLOR_ORANGE, 1);
     if (page->image) {
-        display_fill_rect(200, 65, 84, 64, COLOR_PANEL);
-        esp_err_t err = display_draw_image(202, 67, page->image);
+        display_fill_rect(IMAGE_SLOT_TRAY_X, IMAGE_SLOT_TRAY_Y,
+                          IMAGE_SLOT_TRAY_WIDTH, IMAGE_SLOT_TRAY_HEIGHT,
+                          COLOR_PANEL);
+        esp_err_t err = display_draw_image(IMAGE_SLOT_X, IMAGE_SLOT_Y,
+                                           page->image);
         if (err != ESP_OK) {
             ESP_LOGE("ui", "Could not draw info image: %s", esp_err_to_name(err));
         }
@@ -1086,14 +1095,17 @@ static void draw_page(const app_data_t *data, uint8_t timer_progress,
                 draw_wrapped_text(event->title, 34, 76, 4, COLOR_WHITE, 0);
             }
             if (reserve_event_image) {
-                display_fill_rect(200, 65, 84, 64, COLOR_PANEL);
+                display_fill_rect(IMAGE_SLOT_TRAY_X, IMAGE_SLOT_TRAY_Y,
+                                  IMAGE_SLOT_TRAY_WIDTH, IMAGE_SLOT_TRAY_HEIGHT,
+                                  COLOR_PANEL);
             }
             if (show_event_image) {
                 size_t image_size = 0;
                 const uint8_t *image = downloaded_event_image
                     ? data_event_image_jpeg(&image_size) : NULL;
                 esp_err_t err = display_draw_event_thumbnail(
-                    202, 67, event->image_url, image, image_size);
+                    IMAGE_SLOT_X, IMAGE_SLOT_Y, event->image_url, image,
+                    image_size);
                 if (err != ESP_OK) {
                     ESP_LOGE("ui", "Could not display event image: %s",
                              esp_err_to_name(err));
