@@ -63,15 +63,9 @@ static void draw_icon(int index, int center_x, int center_y, uint16_t color)
 {
     switch (index) {
     case PAGE_CURRENT:
-        display_circle(center_x, center_y, 4, color);
-        display_line(center_x, center_y - 10, center_x, center_y - 7, color);
-        display_line(center_x, center_y + 7, center_x, center_y + 10, color);
-        display_line(center_x - 10, center_y, center_x - 7, center_y, color);
-        display_line(center_x + 7, center_y, center_x + 10, center_y, color);
-        display_line(center_x - 7, center_y - 7, center_x - 5, center_y - 5, color);
-        display_line(center_x + 5, center_y + 5, center_x + 7, center_y + 7, color);
-        display_line(center_x + 5, center_y - 5, center_x + 7, center_y - 7, color);
-        display_line(center_x - 7, center_y + 7, center_x - 5, center_y + 5, color);
+        display_circle(center_x, center_y, 9, color);
+        display_line(center_x, center_y, center_x, center_y - 6, color);
+        display_line(center_x, center_y, center_x + 5, center_y + 2, color);
         break;
     case PAGE_CALENDAR:
         display_line(center_x - 9, center_y - 7, center_x + 9, center_y - 7, color);
@@ -95,14 +89,15 @@ static void draw_icon(int index, int center_x, int center_y, uint16_t color)
         display_line(center_x + 2, center_y + 3, center_x + 5, center_y + 1, color);
         break;
     case PAGE_WEATHER:
-        display_circle(center_x - 5, center_y - 5, 3, color);
-        display_line(center_x - 5, center_y - 10, center_x - 5, center_y - 9, color);
-        display_line(center_x - 10, center_y - 5, center_x - 9, center_y - 5, color);
-        display_line(center_x - 1, center_y - 9, center_x, center_y - 8, color);
-        display_line(center_x - 9, center_y - 9, center_x - 8, center_y - 8, color);
-        display_circle(center_x - 1, center_y + 4, 3, color);
-        display_circle(center_x + 4, center_y + 3, 4, color);
-        display_line(center_x - 5, center_y + 7, center_x + 9, center_y + 7, color);
+        display_circle(center_x, center_y, 4, color);
+        display_line(center_x, center_y - 10, center_x, center_y - 7, color);
+        display_line(center_x, center_y + 7, center_x, center_y + 10, color);
+        display_line(center_x - 10, center_y, center_x - 7, center_y, color);
+        display_line(center_x + 7, center_y, center_x + 10, center_y, color);
+        display_line(center_x - 7, center_y - 7, center_x - 5, center_y - 5, color);
+        display_line(center_x + 5, center_y + 5, center_x + 7, center_y + 7, color);
+        display_line(center_x + 5, center_y - 5, center_x + 7, center_y - 7, color);
+        display_line(center_x - 7, center_y + 7, center_x - 5, center_y + 5, color);
         break;
     case PAGE_INFO:
         display_circle(center_x, center_y, 9, color);
@@ -206,16 +201,26 @@ static void draw_sleep_icon(int x, int y)
 
 static void draw_setup_icon(int x, int y, uint16_t color)
 {
-    display_fill_circle(x, y, 5, color);
-    display_fill_rect(x - 2, y - 8, 4, 3, color);
-    display_fill_rect(x - 2, y + 5, 4, 3, color);
-    display_fill_rect(x - 8, y - 2, 3, 4, color);
-    display_fill_rect(x + 5, y - 2, 3, 4, color);
-    display_fill_rect(x - 6, y - 6, 2, 2, color);
-    display_fill_rect(x + 4, y - 6, 2, 2, color);
-    display_fill_rect(x - 6, y + 4, 2, 2, color);
-    display_fill_rect(x + 4, y + 4, 2, 2, color);
-    display_fill_circle(x, y, 2, COLOR_PANEL);
+    // Modernes Zahnrad-Icon: Material Design Settings
+    // Größerer, sauberer Zahnradkörper mit Loch
+    display_fill_circle(x, y, 6, color);
+    display_fill_circle(x, y, 4, COLOR_PANEL);
+    display_fill_circle(x, y, 2, color);
+
+    // 8 gleichmäßig verteilte Zähne, gerade genug vorhanden
+    // Top-Zahn
+    display_fill_rect(x - 1, y - 8, 3, 4, color);
+    // Bottom-Zahn
+    display_fill_rect(x - 1, y + 5, 3, 4, color);
+    // Left-Zahn
+    display_fill_rect(x - 8, y - 1, 4, 3, color);
+    // Right-Zahn
+    display_fill_rect(x + 5, y - 1, 4, 3, color);
+    // Diagonale Zähne für einen Blockzahnrad-Effekt
+    display_fill_rect(x - 5, y - 5, 2, 2, color);
+    display_fill_rect(x + 3, y - 5, 2, 2, color);
+    display_fill_rect(x - 5, y + 3, 2, 2, color);
+    display_fill_rect(x + 3, y + 3, 2, 2, color);
 }
 
 static void draw_status(uint8_t timer_progress)

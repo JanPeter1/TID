@@ -20,8 +20,8 @@
 #define LVGL_LINE_CAPACITY 256
 #define PHOTO_FS_LETTER 'P'
 #define PHOTO_FS_PATH "P:photo.jpg"
-#define EVENT_THUMBNAIL_WIDTH 96
-#define EVENT_THUMBNAIL_HEIGHT 72
+#define EVENT_THUMBNAIL_WIDTH 108
+#define EVENT_THUMBNAIL_HEIGHT 81
 #define EVENT_THUMBNAIL_PIXEL_COUNT \
     (EVENT_THUMBNAIL_WIDTH * EVENT_THUMBNAIL_HEIGHT)
 #define EVENT_THUMBNAIL_BYTES \
@@ -719,6 +719,7 @@ esp_err_t display_draw_event_thumbnail(int x, int y, const char *url,
         if (event_thumbnail_cache[i].pixels) {
             memory_free(event_thumbnail_cache[i].pixels);
             event_thumbnail_cache[i].pixels = NULL;
+            event_thumbnail_cache[i].url[0] = '\0';
         }
     }
 
