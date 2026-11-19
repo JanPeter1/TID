@@ -1124,15 +1124,15 @@ static void fetch_events(void)
         ESP_LOGW(TAG, "Cannot determine local date for VVV events");
         return;
     }
-    static const char query[] =
-        "query ActivitySearch($params: ActivitySearchParamsInput!, $limit: Int, "
-        "$offset: Int, $order: ActivitySearchOrderEnum!, $startDate: String!, "
-        "$endDate: String!) { activities(params: $params, limit: $limit, "
-        "offset: $offset, order: $order) { ... on ActivitySearchResult { "
-        "totalHits hits { ... on Activity { name slug place "
-        EVENT_IMAGE_GRAPHQL_FIELD
-        "timeslots(startDate: $startDate, endDate: $endDate) { "
-        "startDateTime endDateTime } } } } } }";
+static const char query[] =
+    "query ActivitySearch($params: ActivitySearchParamsInput!, $limit: Int, "
+    "$offset: Int, $order: ActivitySearchOrderEnum!, $lang: String!, $startDate: String!, "
+    "$endDate: String!) { activities(params: $params, limit: $limit, "
+    "offset: $offset, order: $order) { ... on ActivitySearchResult { "
+    "totalHits hits { ... on Activity { name slug place "
+    EVENT_IMAGE_GRAPHQL_FIELD
+    "timeslots(startDate: $startDate, endDate: $endDate) { "
+    "startDateTime endDateTime } } } } } }";
     cJSON *request = cJSON_CreateObject();
     cJSON *variables = cJSON_CreateObject();
     cJSON *params = cJSON_CreateObject();
@@ -1155,6 +1155,7 @@ static void fetch_events(void)
     cJSON_AddItemToObject(params, "targetAudiences", cJSON_CreateArray());
     cJSON_AddItemToObject(params, "themeSlugs", cJSON_CreateArray());
     cJSON_AddItemToObject(variables, "params", params);
+    cJSON_AddStringToObject(variables, "lang", "de");
     cJSON_AddStringToObject(variables, "startDate", today);
     cJSON_AddStringToObject(variables, "endDate", tomorrow);
     cJSON_AddItemToObject(request, "variables", variables);
