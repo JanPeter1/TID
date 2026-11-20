@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "image_cache.h"
 #include "memory.h"
 #include "ota.h"
 #include "touch.h"
@@ -82,6 +83,7 @@ void app_main(void)
 
     memory_tls_init();
     ESP_ERROR_CHECK(display_init());
+    ESP_ERROR_CHECK(image_cache_init());
     ESP_ERROR_CHECK(touch_driver_init());
     ESP_ERROR_CHECK(config_init());
     ESP_ERROR_CHECK(web_config_start());

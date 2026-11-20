@@ -11,6 +11,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "german_font.h"
+#include "image_cache.h"
 #include "lvgl.h"
 #include "image/lv_image_decoder_private.h"
 #include "memory.h"
@@ -20,12 +21,6 @@
 #define LVGL_LINE_CAPACITY 256
 #define PHOTO_FS_LETTER 'P'
 #define PHOTO_FS_PATH "P:photo.jpg"
-#define EVENT_THUMBNAIL_WIDTH 108
-#define EVENT_THUMBNAIL_HEIGHT 81
-#define EVENT_THUMBNAIL_PIXEL_COUNT \
-    (EVENT_THUMBNAIL_WIDTH * EVENT_THUMBNAIL_HEIGHT)
-#define EVENT_THUMBNAIL_BYTES \
-    (EVENT_THUMBNAIL_PIXEL_COUNT * sizeof(uint16_t))
 
 static const char *TAG = "display";
 static lv_display_t *lv_display;
@@ -42,16 +37,6 @@ static size_t photo_fs_position;
 static lv_fs_drv_t photo_fs_driver;
 static lv_point_precise_t line_points[LVGL_LINE_CAPACITY][2];
 static uint8_t *display_buffer;
-
-typedef struct {
-    char url[DATA_EVENT_IMAGE_URL_LENGTH];
-    uint16_t *pixels;
-    uint64_t last_used;
-    lv_image_dsc_t image;
-} event_thumbnail_cache_entry_t;
-
-static event_thumbnail_cache_entry_t event_thumbnail_cache[DATA_EVENT_COUNT];
-static uint64_t event_thumbnail_use_counter;
 
 static bool photo_fs_ready(lv_fs_drv_t *driver)
 {
@@ -566,22 +551,9 @@ esp_err_t display_draw_image(int x, int y, const lv_image_dsc_t *image)
     return ESP_OK;
 }
 
-static event_thumbnail_cache_entry_t *find_event_thumbnail(const char *url)
-{
-    if (!url || !url[0]) return NULL;
-    for (size_t i = 0; i < DATA_EVENT_COUNT; i++) {
-        event_thumbnail_cache_entry_t *entry = &event_thumbnail_cache[i];
-        if (entry->url[0] && strcasecmp(entry->url, url) == 0) {
-            entry->last_used = ++event_thumbnail_use_counter;
-            return entry;
-        }
-    }
-    return NULL;
-}
-
 bool display_event_thumbnail_cached(const char *url)
 {
-    return find_event_thumbnail(url) != NULL;
+    return image_cache_has(url);
 }
 
 static esp_err_t decode_event_thumbnail(const uint8_t *data, size_t size,
@@ -690,17 +662,6 @@ static esp_err_t decode_event_thumbnail(const uint8_t *data, size_t size,
     return complete ? err : ESP_FAIL;
 }
 
-static event_thumbnail_cache_entry_t *event_thumbnail_cache_slot(void)
-{
-    event_thumbnail_cache_entry_t *oldest = &event_thumbnail_cache[0];
-    for (size_t i = 0; i < DATA_EVENT_COUNT; i++) {
-        event_thumbnail_cache_entry_t *entry = &event_thumbnail_cache[i];
-        if (!entry->url[0]) return entry;
-        if (entry->last_used < oldest->last_used) oldest = entry;
-    }
-    return oldest;
-}
-
 esp_err_t display_draw_event_thumbnail(int x, int y, const char *url,
                                        const uint8_t *data, size_t size)
 {
@@ -708,8 +669,29 @@ esp_err_t display_draw_event_thumbnail(int x, int y, const char *url,
     size_t url_length = strnlen(url, DATA_EVENT_IMAGE_URL_LENGTH);
     if (url_length >= DATA_EVENT_IMAGE_URL_LENGTH) return ESP_ERR_INVALID_SIZE;
 
-    event_thumbnail_cache_entry_t *entry = find_event_thumbnail(url);
-    if (entry) return display_draw_image(x, y, &entry->image);
+    if (image_cache_has(url)) {
+        uint16_t *pixels = NULL;
+        size_t size_read = 0;
+        esp_err_t err = image_cache_read(url, &pixels, &size_read);
+        if (err == ESP_OK && pixels && size_read == EVENT_THUMBNAIL_BYTES) {
+            lv_image_dsc_t image = {
+                .header = {
+                    .magic = LV_IMAGE_HEADER_MAGIC,
+                    .cf = LV_COLOR_FORMAT_RGB565,
+                    .w = EVENT_THUMBNAIL_WIDTH,
+                    .h = EVENT_THUMBNAIL_HEIGHT,
+                    .stride = EVENT_THUMBNAIL_WIDTH * sizeof(uint16_t),
+                },
+                .data_size = EVENT_THUMBNAIL_BYTES,
+                .data = (const uint8_t *)pixels,
+            };
+            esp_err_t draw_err = display_draw_image(x, y, &image);
+            memory_free(pixels);
+            return draw_err;
+        }
+        if (pixels) memory_free(pixels);
+    }
+
     if (!data || size < 4 || data[0] != 0xFF || data[1] != 0xD8) {
         return ESP_ERR_NOT_FOUND;
     }
@@ -724,12 +706,12 @@ esp_err_t display_draw_event_thumbnail(int x, int y, const char *url,
         return err;
     }
 
-    entry = event_thumbnail_cache_slot();
-    memory_free(entry->pixels);
-    entry->pixels = pixels;
-    memcpy(entry->url, url, url_length + 1);
-    entry->last_used = ++event_thumbnail_use_counter;
-    entry->image = (lv_image_dsc_t) {
+    err = image_cache_write(url, pixels, EVENT_THUMBNAIL_BYTES);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to write thumbnail to cache: %s", esp_err_to_name(err));
+    }
+
+    lv_image_dsc_t image = {
         .header = {
             .magic = LV_IMAGE_HEADER_MAGIC,
             .cf = LV_COLOR_FORMAT_RGB565,
@@ -740,7 +722,9 @@ esp_err_t display_draw_event_thumbnail(int x, int y, const char *url,
         .data_size = EVENT_THUMBNAIL_BYTES,
         .data = (const uint8_t *)pixels,
     };
-    return display_draw_image(x, y, &entry->image);
+    esp_err_t draw_err = display_draw_image(x, y, &image);
+    memory_free(pixels);
+    return draw_err;
 }
 
 static esp_err_t draw_jpeg(int x, int y, const uint8_t *data, size_t size)
