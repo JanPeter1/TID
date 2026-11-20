@@ -337,7 +337,7 @@ static event_image_cache_entry_t *event_image_cache_find(const char *url)
     for (size_t i = 0; i < DATA_EVENT_COUNT; i++)
     {
         if (event_image_cache[i].jpeg &&
-            strcmp(event_image_cache[i].url, url) == 0)
+            strcasecmp(event_image_cache[i].url, url) == 0)
             return &event_image_cache[i];
     }
     return NULL;
@@ -383,8 +383,8 @@ static void prune_event_image_cache_locked(void)
         bool listed = false;
         for (size_t e = 0; e < current_data.event_count && e < DATA_EVENT_COUNT; e++)
         {
-            if (strcmp(current_data.events[e].image_url,
-                       event_image_cache[i].url) == 0)
+            if (strcasecmp(current_data.events[e].image_url,
+                           event_image_cache[i].url) == 0)
             {
                 listed = true;
                 break;
@@ -610,8 +610,8 @@ static const char *event_image_url(cJSON *hit)
 static bool valid_event_image_url(const char *url)
 {
     return url && strlen(url) < DATA_EVENT_IMAGE_URL_LENGTH &&
-           strncmp(url, EVENT_IMAGE_CDN_PREFIX,
-                   sizeof(EVENT_IMAGE_CDN_PREFIX) - 1) == 0;
+           strncasecmp(url, EVENT_IMAGE_CDN_PREFIX,
+                       sizeof(EVENT_IMAGE_CDN_PREFIX) - 1) == 0;
 }
 
 static bool photo_date_valid(const char *date)
@@ -2056,12 +2056,22 @@ static void fetch_event_image(const char *url, uint32_t request_serial)
     bool success = cached;
     if (!cached)
     {
-        uint8_t *jpeg = http_get_event_image(url, &downloaded_size);
-        success = jpeg != NULL;
-        if (jpeg && !event_image_cache_store(url, jpeg, downloaded_size))
+        xSemaphoreTake(data_lock, portMAX_DELAY);
+        cached = event_image_cache_find(url) != NULL;
+        xSemaphoreGive(data_lock);
+        if (!cached)
         {
-            memory_free(jpeg);
-            success = false;
+            uint8_t *jpeg = http_get_event_image(url, &downloaded_size);
+            success = jpeg != NULL;
+            if (jpeg && !event_image_cache_store(url, jpeg, downloaded_size))
+            {
+                memory_free(jpeg);
+                success = false;
+            }
+        }
+        else
+        {
+            success = true;
         }
     }
 
@@ -2414,7 +2424,7 @@ void data_request_event_image(uint8_t event_index)
         xSemaphoreGive(data_lock);
         return;
     }
-    if (event_image_requested && strcmp(event_image_request_url, url) == 0)
+    if (event_image_requested && strcasecmp(event_image_request_url, url) == 0)
     {
         event_image_requested_index = event_index;
         current_data.event_image_index = event_index;
@@ -2423,7 +2433,7 @@ void data_request_event_image(uint8_t event_index)
     }
     if (current_data.event_image_error &&
         current_data.event_image_index == event_index &&
-        strcmp(event_image_request_url, url) == 0)
+        strcasecmp(event_image_request_url, url) == 0)
     {
         xSemaphoreGive(data_lock);
         return;

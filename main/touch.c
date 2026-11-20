@@ -200,6 +200,13 @@ esp_err_t touch_driver_enable_deep_sleep_wakeup(void)
 #if CONFIG_TID_BOARD_CYD
     if (gpio_get_level(BOARD_TOUCH_PIN_IRQ) == 0) return ESP_ERR_INVALID_STATE;
     return esp_sleep_enable_ext0_wakeup(BOARD_TOUCH_PIN_IRQ, 0);
+#elif CONFIG_TID_BOARD_JC3248W535C
+#if BOARD_TOUCH_PIN_INT >= 0
+    if (gpio_get_level(BOARD_TOUCH_PIN_INT) == 0) return ESP_ERR_INVALID_STATE;
+    return esp_sleep_enable_ext0_wakeup(BOARD_TOUCH_PIN_INT, 0);
+#else
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
 #else
     return ESP_ERR_NOT_SUPPORTED;
 #endif

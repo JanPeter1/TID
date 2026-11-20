@@ -571,7 +571,7 @@ static event_thumbnail_cache_entry_t *find_event_thumbnail(const char *url)
     if (!url || !url[0]) return NULL;
     for (size_t i = 0; i < DATA_EVENT_COUNT; i++) {
         event_thumbnail_cache_entry_t *entry = &event_thumbnail_cache[i];
-        if (entry->url[0] && strcmp(entry->url, url) == 0) {
+        if (entry->url[0] && strcasecmp(entry->url, url) == 0) {
             entry->last_used = ++event_thumbnail_use_counter;
             return entry;
         }
@@ -712,15 +712,6 @@ esp_err_t display_draw_event_thumbnail(int x, int y, const char *url,
     if (entry) return display_draw_image(x, y, &entry->image);
     if (!data || size < 4 || data[0] != 0xFF || data[1] != 0xD8) {
         return ESP_ERR_NOT_FOUND;
-    }
-
-    /* free any previously cached thumbnail to keep heap usage minimal */
-    for (size_t i = 0; i < DATA_EVENT_COUNT; i++) {
-        if (event_thumbnail_cache[i].pixels) {
-            memory_free(event_thumbnail_cache[i].pixels);
-            event_thumbnail_cache[i].pixels = NULL;
-            event_thumbnail_cache[i].url[0] = '\0';
-        }
     }
 
     uint16_t *pixels = memory_alloc(EVENT_THUMBNAIL_BYTES, MEMORY_ALLOC_LARGE);

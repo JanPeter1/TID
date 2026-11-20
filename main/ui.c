@@ -1327,8 +1327,9 @@ static void ui_task(void *unused)
                     ota_manifest_t manifest = {0};
                     esp_err_t err = ota_check_update(&manifest);
                     if (err == ESP_OK && manifest.available) {
-                        ESP_LOGI("ui", "Manual OTA check: update available %s",
+                        ESP_LOGI("ui", "Manual OTA check: update available %s, starting update",
                                  manifest.version);
+                        ota_start_update(&manifest);
                     } else if (err == ESP_OK) {
                         ESP_LOGI("ui", "Manual OTA check: no update");
                     } else {
@@ -1375,10 +1376,14 @@ static void ui_task(void *unused)
         }
         if (sleep_pending && !touched) {
             esp_err_t err = touch_driver_enable_deep_sleep_wakeup();
-            if (err != ESP_OK) {
+            if (err == ESP_ERR_NOT_SUPPORTED) {
+                ESP_LOGW("ui", "Touch wakeup not supported on this board; using timer wakeup");
+                esp_sleep_enable_timer_wakeup(60 * 1000000ULL);  // 60s fallback
+            } else if (err != ESP_OK) {
                 ESP_LOGE("ui", "Could not enable touch wakeup: %s", esp_err_to_name(err));
                 sleep_pending = false;
-            } else {
+            }
+            if (err != ESP_ERR_INVALID_STATE) {
                 display_fill_rect(0, 34, DISPLAY_WIDTH, 188, COLOR_BACKGROUND);
                 display_text(70, 105, "BERÜHREN ZUM AUFWACHEN",
                              COLOR_ORANGE, 1);
@@ -1386,6 +1391,7 @@ static void ui_task(void *unused)
                 vTaskDelay(pdMS_TO_TICKS(250));
                 esp_deep_sleep_start();
             }
+            sleep_pending = false;
         }
 
         if (!ntp_sync_logged && config_ntp_synced()) {
