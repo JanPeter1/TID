@@ -1,4 +1,5 @@
 dependencies:
   espressif/cjson: "1.7.19~2"
   espressif/esp_lcd_axs15231b: "2.1.1"
+  espressif/littlefs: "^1.0.0"
   lvgl/lvgl: "9.6.0~1"
