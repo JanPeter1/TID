@@ -17,6 +17,7 @@
 #include "ota.h"
 #include "touch.h"
 #include "web_config.h"
+#include "footer_icons.h"
 #include "memory.h"
 #include "ui.h"
 
@@ -178,15 +179,9 @@ static void draw_wifi_icon(int center_x, int center_y, uint16_t color, int rssi)
 
 static void draw_qr_icon(int x, int y)
 {
-    display_fill_rect(x - 6, y - 6, 12, 12, COLOR_WHITE);
-    display_fill_rect(x - 5, y - 5, 4, 4, COLOR_PANEL);
-    display_fill_rect(x - 4, y - 4, 2, 2, COLOR_WHITE);
-    display_fill_rect(x + 1, y - 5, 4, 4, COLOR_PANEL);
-    display_fill_rect(x + 2, y - 4, 2, 2, COLOR_WHITE);
-    display_fill_rect(x - 5, y + 1, 4, 4, COLOR_PANEL);
-    display_fill_rect(x - 4, y + 2, 2, 2, COLOR_WHITE);
-    display_fill_rect(x + 1, y + 1, 2, 2, COLOR_PANEL);
-    display_fill_rect(x + 4, y + 4, 2, 2, COLOR_PANEL);
+    /* 16x16 icon centered on x, aligned with the 16 px footer (starts at y 224). */
+    (void)y;
+    (void)display_draw_image(x - FOOTER_ICON_SIZE / 2, 224, &footer_icon_qr_white);
 }
 
 static void draw_close_icon(int x, int y)
@@ -203,26 +198,10 @@ static void draw_sleep_icon(int x, int y)
 
 static void draw_setup_icon(int x, int y, uint16_t color)
 {
-    // Modernes Zahnrad-Icon: Material Design Settings
-    // Größerer, sauberer Zahnradkörper mit Loch
-    display_fill_circle(x, y, 6, color);
-    display_fill_circle(x, y, 4, COLOR_PANEL);
-    display_fill_circle(x, y, 2, color);
-
-    // 8 gleichmäßig verteilte Zähne, gerade genug vorhanden
-    // Top-Zahn
-    display_fill_rect(x - 1, y - 8, 3, 4, color);
-    // Bottom-Zahn
-    display_fill_rect(x - 1, y + 5, 3, 4, color);
-    // Left-Zahn
-    display_fill_rect(x - 8, y - 1, 4, 3, color);
-    // Right-Zahn
-    display_fill_rect(x + 5, y - 1, 4, 3, color);
-    // Diagonale Zähne für einen Blockzahnrad-Effekt
-    display_fill_rect(x - 5, y - 5, 2, 2, color);
-    display_fill_rect(x + 3, y - 5, 2, 2, color);
-    display_fill_rect(x - 5, y + 3, 2, 2, color);
-    display_fill_rect(x + 3, y + 3, 2, 2, color);
+    (void)y;
+    const lv_image_dsc_t *icon = color == COLOR_ORANGE
+        ? &footer_icon_settings_orange : &footer_icon_settings_white;
+    (void)display_draw_image(x - FOOTER_ICON_SIZE / 2, 224, icon);
 }
 
 static void draw_ota_status(int x, int y)
