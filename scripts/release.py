@@ -15,11 +15,19 @@ Umgebungsvariablen (oder .env-Datei):
   FTP_FW_PATH     Remote-Pfad für firmware.bin (Default: /tx94/firmware/firmware.bin)
   FTP_MANIFEST_PATH Remote-Pfad für manifest.json (Default: /tx94/firmware/manifest.json)
   VERSION_BUMP    major|minor|patch (Default: patch)
-  DRY_RUN         true|false (nur Version erhöhen, kein Build/Upload, Default: false)
+  DRY_RUN         true|false (nur anzeigen, was passieren würde; Default: false)
+
+Kommandozeile (hat Vorrang vor den Umgebungsvariablen):
+  python scripts/release.py              Patch-Release (1.0.1 -> 1.0.2)
+  python scripts/release.py --minor      Minor-Release (1.0.1 -> 1.1.0)
+  python scripts/release.py --major      Major-Release (1.0.1 -> 2.0.0)
+  python scripts/release.py --dry-run    Nichts ändern, bauen oder hochladen;
+                                         zeigt nur die neue Version
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -254,11 +262,30 @@ def compute_sha256(file_path: Path) -> str:
     return h.hexdigest()
 
 
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Baut die Firmware, erhöht die Version und lädt sie per OTA-Manifest hoch.")
+    bump = parser.add_mutually_exclusive_group()
+    bump.add_argument("--patch", action="store_const", const="patch", dest="bump",
+                      help="Patch-Version erhöhen (Standard)")
+    bump.add_argument("--minor", action="store_const", const="minor", dest="bump",
+                      help="Minor-Version erhöhen, Patch auf 0")
+    bump.add_argument("--major", action="store_const", const="major", dest="bump",
+                      help="Major-Version erhöhen, Minor und Patch auf 0")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Nichts ändern, bauen oder hochladen; nur die neue Version anzeigen")
+    return parser.parse_args(argv)
+
+
 def main() -> int:
+    args = parse_args()
     load_env()
 
-    dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
-    bump_mode = os.getenv("VERSION_BUMP", "patch")
+    dry_run = args.dry_run or os.getenv("DRY_RUN", "false").lower() == "true"
+    bump_mode = args.bump or os.getenv("VERSION_BUMP", "patch").lower()
+    if bump_mode not in ("major", "minor", "patch"):
+        print(f"Ungültiger VERSION_BUMP '{bump_mode}' (erlaubt: major, minor, patch)")
+        return 2
 
     print(f"OTA Release Script")
     print(f"  Projekt: {PROJECT_DIR}")
@@ -279,8 +306,8 @@ def main() -> int:
     print(f"Neue Version: {new_str}")
 
     if dry_run:
-        set_version(new_str)
-        print(f"[DRY RUN] Version auf {new_str} gesetzt (kein Build/Upload).")
+        print(f"[DRY RUN] Würde Version {version_str(current)} -> {new_str} setzen, "
+              "bauen und hochladen. Es wurde nichts geändert.")
         return 0
 
     # Version in version.txt schreiben
