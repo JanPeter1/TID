@@ -204,20 +204,41 @@ static void draw_setup_icon(int x, int y, uint16_t color)
     (void)display_draw_image(x - FOOTER_ICON_SIZE / 2, 224, icon);
 }
 
-static void draw_ota_status(int x, int y)
+/* Short OTA status text, or NULL while idle or after a successful update. */
+static const char *ota_status_text(void)
 {
-    ota_status_t status = ota_get_status();
-    if (status == OTA_STATUS_IDLE || status == OTA_STATUS_SUCCESS) return;
-    const char *text = NULL;
-    switch (status) {
-        case OTA_STATUS_CHECKING: text = "OTA: PRUEFE"; break;
-        case OTA_STATUS_UPDATE_AVAILABLE: text = "OTA: UPDATE"; break;
-        case OTA_STATUS_DOWNLOADING: text = "OTA: DOWNLOAD"; break;
-        case OTA_STATUS_WRITING: text = "OTA: WRITE"; break;
-        case OTA_STATUS_FAILED: text = "OTA: FEHLER"; break;
-        default: text = "OTA"; break;
+    switch (ota_get_status()) {
+        case OTA_STATUS_CHECKING: return "OTA: PRUEFE";
+        case OTA_STATUS_UPDATE_AVAILABLE: return "OTA: UPDATE";
+        case OTA_STATUS_NO_UPDATE: return "OTA: AKTUELL";
+        case OTA_STATUS_DOWNLOADING: return "OTA: DOWNLOAD";
+        case OTA_STATUS_WRITING: return "OTA: WRITE";
+        case OTA_STATUS_FAILED: return "OTA: FEHLER";
+        case OTA_STATUS_IDLE:
+        case OTA_STATUS_SUCCESS:
+            return NULL;
+        default: return "OTA";
     }
-    display_text_bg(x, y, text, COLOR_ORANGE, COLOR_PANEL, 1);
+}
+
+/*
+ * Setup banner above the status bar: three lines (SSID, URL, firmware version
+ * plus OTA status). It must end at y 224 so it never overlaps the footer.
+ */
+static void draw_setup_banner(void)
+{
+    const int top = 179;
+    display_fill_rect(0, top, DISPLAY_WIDTH, 224 - top, COLOR_ORANGE);
+    display_text_bg(4, top, config_ap_ssid(), COLOR_BACKGROUND, COLOR_ORANGE, 1);
+    display_text_bg(4, top + 15, "HTTP://192.168.4.1 OHNE LOGIN",
+                    COLOR_BACKGROUND, COLOR_ORANGE, 1);
+    char version_text[32];
+    snprintf(version_text, sizeof(version_text), "FW %s", ota_get_version());
+    display_text_bg(4, top + 30, version_text, COLOR_BACKGROUND, COLOR_ORANGE, 1);
+    const char *ota_text = ota_status_text();
+    if (ota_text) {
+        display_text_bg(130, top + 30, ota_text, COLOR_BACKGROUND, COLOR_ORANGE, 1);
+    }
 }
 
 static void draw_status(uint8_t timer_progress)
@@ -240,23 +261,7 @@ static void draw_status(uint8_t timer_progress)
         : rssi >= -60 ? COLOR_GREEN : rssi >= -75 ? 0xFFE0 : 0xF800;
     draw_wifi_icon(186, 228, wifi_color, rssi);
     if (setup_credentials_visible && xTaskGetTickCount() < setup_visible_until) {
-        display_fill_rect(0, 194, DISPLAY_WIDTH, 30, COLOR_ORANGE);
-        display_text_bg(4, 194, config_ap_ssid(), COLOR_BACKGROUND, COLOR_ORANGE, 1);
-        display_text_bg(4, 209, "HTTP://192.168.4.1 OHNE LOGIN",
-                        COLOR_BACKGROUND, COLOR_ORANGE, 1);
-        ota_status_t status = ota_get_status();
-        if (status != OTA_STATUS_IDLE && status != OTA_STATUS_SUCCESS) {
-            const char *text = NULL;
-            switch (status) {
-                case OTA_STATUS_CHECKING: text = "OTA: PRUEFE"; break;
-                case OTA_STATUS_UPDATE_AVAILABLE: text = "OTA: UPDATE"; break;
-                case OTA_STATUS_DOWNLOADING: text = "OTA: DOWNLOAD"; break;
-                case OTA_STATUS_WRITING: text = "OTA: WRITE"; break;
-                case OTA_STATUS_FAILED: text = "OTA: FEHLER"; break;
-                default: text = "OTA"; break;
-            }
-            display_text_bg(210, 222, text, COLOR_BACKGROUND, COLOR_ORANGE, 1);
-        }
+        draw_setup_banner();
     } else {
         setup_credentials_visible = false;
     }
@@ -1328,6 +1333,13 @@ static void ui_task(void *unused)
                         ESP_LOGI("ui", "Manual OTA check: no update");
                     } else {
                         ESP_LOGW("ui", "Manual OTA check failed: %s",
+                                 esp_err_to_name(err));
+                    }
+                } else if (config_setup_ap_active()) {
+                    esp_err_t err = config_stop_setup_ap();
+                    setup_credentials_visible = false;
+                    if (err != ESP_OK) {
+                        ESP_LOGE("ui", "Could not stop setup AP: %s",
                                  esp_err_to_name(err));
                     }
                 } else {

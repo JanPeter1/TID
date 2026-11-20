@@ -43,7 +43,7 @@ Use the ESP-IDF extension for project operations. The project requires the ESP-I
 
 ## Initial Wi-Fi setup
 
-1. Tap the gear icon at the bottom right of the display. The setup access point is off by default; tapping starts the open AP and shows its SSID.
+1. Tap the gear icon at the bottom right of the display. The setup access point is off by default; tapping starts the open AP and shows its SSID, URL, the firmware version and the OTA status for 30 seconds. Tapping the gear again stops the AP.
 2. Connect to that network and open `http://192.168.4.1/`. The portal does not require a login.
 3. Enter the home Wi-Fi and calendar credentials. They are stored in NVS; the setup AP remains enabled until reboot.
 

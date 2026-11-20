@@ -27,3 +27,4 @@ int config_wifi_rssi(void);
 bool config_setup_ap_active(void);
 bool config_ntp_synced(void);
 esp_err_t config_start_setup_ap(void);
+esp_err_t config_stop_setup_ap(void);

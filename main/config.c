@@ -197,6 +197,17 @@ esp_err_t config_start_setup_ap(void)
     return ESP_OK;
 }
 
+esp_err_t config_stop_setup_ap(void)
+{
+    if (!setup_ap_active) return ESP_OK;
+
+    /* Back to station-only mode; the existing Wi-Fi connection stays up. */
+    ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "disable setup AP mode");
+    setup_ap_active = false;
+    ESP_LOGW(TAG, "Setup AP stopped");
+    return ESP_OK;
+}
+
 esp_err_t config_init(void)
 {
     esp_err_t err = nvs_flash_init();
