@@ -16,7 +16,7 @@
 #include "psa/crypto.h"
 #include "memory.h"
 
-#include "familie_riegel_ca.h"
+#include "esp_crt_bundle.h"
 
 static const char *TAG = "ota";
 
@@ -96,7 +96,7 @@ static bool http_get_json(const char *url, char *output, size_t output_size)
         .event_handler = json_event_handler,
         .user_data = &response,
         .timeout_ms = 20000,
-        .cert_pem = FAMILIE_RIEGEL_CA_PEM,
+        .crt_bundle_attach = esp_crt_bundle_attach,
         .keep_alive_enable = true,
         .buffer_size = 4096,
         .buffer_size_tx = 2048,
@@ -297,7 +297,7 @@ static bool download_firmware(const ota_manifest_t *manifest, const esp_partitio
         .event_handler = download_event_handler,
         .user_data = &ctx,
         .timeout_ms = 60000,
-        .cert_pem = FAMILIE_RIEGEL_CA_PEM,
+        .crt_bundle_attach = esp_crt_bundle_attach,
         .keep_alive_enable = true,
         .buffer_size = 4096,
         .buffer_size_tx = 512,
