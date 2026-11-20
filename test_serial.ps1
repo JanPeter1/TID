@@ -6,6 +6,6 @@ try {
     for ($i = 0; $i -lt 80; $i++) {
         $data += $port.ReadLine() + "`n"
     }
-} catch { $data += "read timeout after $i reads" }
+} catch { $data += "read timeout after $i reads`n" }
 $port.Close()
 Write-Host $data
