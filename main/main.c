@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "memory.h"
 #include "ota.h"
 #include "touch.h"
 #include "ui.h"
@@ -79,6 +80,7 @@ void app_main(void)
     setenv("TZ", "CET-1CEST,M3.5.0/2,M10.5.0/3", 1);
     tzset();
 
+    memory_tls_init();
     ESP_ERROR_CHECK(display_init());
     ESP_ERROR_CHECK(touch_driver_init());
     ESP_ERROR_CHECK(config_init());

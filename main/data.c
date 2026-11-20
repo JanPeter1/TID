@@ -161,7 +161,9 @@ static bool http_get(const char *url, const char *username, const char *password
         heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     size_t internal_largest_before =
         heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    memory_tls_lock();
     esp_err_t err = esp_http_client_perform(client);
+    memory_tls_unlock();
     int status = esp_http_client_get_status_code(client);
     bool success = err == ESP_OK && status >= 200 && status < 300 &&
                    !response.overflow;
@@ -271,7 +273,9 @@ esp_http_client_config_t config = {
     size_t internal_free_before = heap_caps_get_free_size(internal_caps);
     size_t internal_largest_before = heap_caps_get_largest_free_block(internal_caps);
     esp_err_t monitor_err = heap_caps_monitor_local_minimum_free_size_start();
+    memory_tls_lock();
     esp_err_t err = esp_http_client_perform(client);
+    memory_tls_unlock();
     int status = esp_http_client_get_status_code(client);
     size_t internal_minimum_during = monitor_err == ESP_OK
                                          ? heap_caps_get_minimum_free_size(internal_caps)
@@ -404,7 +408,11 @@ static bool http_get_event_image_file(const char *url, uint32_t request_serial,
                 "https://www.texel.net/de/veranstaltungsuebersicht/");
         }
         if (err == ESP_OK)
+        {
+            memory_tls_lock();
             err = esp_http_client_perform(client);
+            memory_tls_unlock();
+        }
         status = esp_http_client_get_status_code(client);
         esp_http_client_cleanup(client);
         if ((err != ESP_ERR_HTTP_INCOMPLETE_DATA &&
@@ -489,7 +497,9 @@ static bool http_post_json(const char *url, const char *body,
         }
         if (err == ESP_OK)
         {
+            memory_tls_lock();
             err = esp_http_client_perform(client);
+            memory_tls_unlock();
         }
         int status = esp_http_client_get_status_code(client);
         bool success = err == ESP_OK && status >= 200 && status < 300;

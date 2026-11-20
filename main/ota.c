@@ -108,7 +108,9 @@ static bool http_get_json(const char *url, char *output, size_t output_size)
         return false;
     }
 
+    memory_tls_lock();
     esp_err_t err = esp_http_client_perform(client);
+    memory_tls_unlock();
     int status = esp_http_client_get_status_code(client);
     bool success = err == ESP_OK && status >= 200 && status < 300 && !response.overflow;
 
@@ -116,6 +118,10 @@ static bool http_get_json(const char *url, char *output, size_t output_size)
     {
         ESP_LOGW(TAG, "GET JSON failed: %s, HTTP %d, URL %s",
                  esp_err_to_name(err), status, url);
+        if (err != ESP_OK)
+        {
+            memory_log_heap(TAG, "after failed HTTPS request");
+        }
     }
     else if (response.overflow)
     {
@@ -305,7 +311,9 @@ static bool download_firmware(const ota_manifest_t *manifest, const esp_partitio
     }
 
     set_status(OTA_STATUS_DOWNLOADING, "Downloading firmware...");
+    memory_tls_lock();
     esp_err_t err = esp_http_client_perform(client);
+    memory_tls_unlock();
     int status = esp_http_client_get_status_code(client);
 
     *sha256_len = ctx.sha256_len;
@@ -380,7 +388,17 @@ esp_err_t ota_check_update(ota_manifest_t *manifest)
         return ESP_ERR_NO_MEM;
     }
 
-    bool ok = http_get_json(OTA_MANIFEST_URL, json, OTA_MANIFEST_JSON_SIZE);
+    /* Right after boot the content refresh competes for internal heap; retry. */
+    bool ok = false;
+    for (int attempt = 1; attempt <= 3 && !ok; attempt++)
+    {
+        ok = http_get_json(OTA_MANIFEST_URL, json, OTA_MANIFEST_JSON_SIZE);
+        if (!ok && attempt < 3)
+        {
+            ESP_LOGW(TAG, "Manifest fetch attempt %d failed, retrying in 15 s", attempt);
+            vTaskDelay(pdMS_TO_TICKS(15000));
+        }
+    }
     if (!ok)
     {
         memory_free(json);
