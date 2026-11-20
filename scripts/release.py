@@ -2,7 +2,7 @@
 """
 OTA Release Script
 
-Erhöht die Firmware-Version, baut das Projekt und lädt die Firmware
+Erhöht die Firmware-Version (version.txt), baut das Projekt und lädt die Firmware
 per SFTP auf den Webserver hoch.
 
 Umgebungsvariablen (oder .env-Datei):
@@ -36,6 +36,7 @@ except ImportError:
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 SDKCONFIG = PROJECT_DIR / "sdkconfig"
+VERSION_FILE = PROJECT_DIR / "version.txt"
 SDKCONFIG_DEFAULTS = PROJECT_DIR / "sdkconfig.defaults"
 IDF_PY = r"D:\Development\ESP32\v6.1\v6.1\esp-idf\tools\idf.py"
 IDF_VENV_PYTHON = r"C:\Espressif\tools\python\v6.1\venv\Scripts\python.exe"
@@ -49,17 +50,32 @@ def load_env() -> None:
 
 
 def get_current_version() -> tuple[int, int, int] | None:
-    """Liest die aktuelle Version aus sdkconfig (CONFIG_APP_PROJECT_VER_STR)."""
-    if not SDKCONFIG.exists():
-        return None
-    text = SDKCONFIG.read_text(encoding="utf-8")
-    m = re.search(r'^CONFIG_APP_PROJECT_VER_STR="([^"]+)"$', text, re.MULTILINE)
-    if not m:
-        return None
-    ver = m.group(1)
-    parts = re.match(r"^(\d+)\.(\d+)\.(\d+)$", ver)
-    if parts:
-        return tuple(int(x) for x in parts.groups())  # type: ignore[return-value]
+    """Liest die aktuelle Version aus version.txt.
+
+    version.txt wird von CMakeLists.txt als PROJECT_VER verwendet. Falls die
+    Datei fehlt, werden ältere Quellen als Rückfall genutzt (sdkconfig,
+    build/project_description.json).
+    """
+    if VERSION_FILE.exists():
+        ver = parse_version(VERSION_FILE.read_text(encoding="utf-8"))
+        if ver:
+            return ver
+    if SDKCONFIG.exists():
+        text = SDKCONFIG.read_text(encoding="utf-8")
+        for key in ("CONFIG_APP_PROJECT_VER", "CONFIG_APP_PROJECT_VER_STR"):
+            m = re.search(rf'^{key}="([^"]+)"$', text, re.MULTILINE)
+            if m and parse_version(m.group(1)):
+                return parse_version(m.group(1))
+    description = PROJECT_DIR / "build" / "project_description.json"
+    if description.exists():
+        try:
+            ver = parse_version(
+                json.loads(description.read_text(encoding="utf-8"))
+                .get("project_version", ""))
+            if ver:
+                return ver
+        except (ValueError, OSError):
+            pass
     return None
 
 
@@ -83,21 +99,23 @@ def version_str(ver: tuple[int, int, int]) -> str:
     return f"{ver[0]}.{ver[1]}.{ver[2]}"
 
 
-def set_version_in_sdkconfig(new_ver: str) -> None:
-    """Setzt CONFIG_APP_PROJECT_VER und den Versionsstring in sdkconfig."""
-    text = SDKCONFIG.read_text(encoding="utf-8")
+def set_version(new_ver: str) -> None:
+    """Schreibt die neue Version in version.txt (Quelle für PROJECT_VER).
 
-    # Entferne alte Einträge falls vorhanden
-    text = re.sub(r'^#? CONFIG_APP_PROJECT_VER_FROM_CONFIG is not set$',
-                  '', text, flags=re.MULTILINE)
-    text = re.sub(r'^CONFIG_APP_PROJECT_VER_STR=.*$', '', text, flags=re.MULTILINE)
-    text = re.sub(r'^# CONFIG_APP_PROJECT_VER_STR is not set$', '', text, flags=re.MULTILINE)
-
-    # Füge neue Einträge hinzu
-    text += f'\nCONFIG_APP_PROJECT_VER_FROM_CONFIG=y\n'
-    text += f'CONFIG_APP_PROJECT_VER_STR="{new_ver}"\n'
-
-    SDKCONFIG.write_text(text, encoding="utf-8")
+    Entfernt außerdem veraltete Versionseinträge aus der sdkconfig, die ältere
+    Versionen dieses Skripts dort angelegt haben: CONFIG_APP_PROJECT_VER_STR
+    gibt es in ESP-IDF nicht, und CONFIG_APP_PROJECT_VER_FROM_CONFIG=y würde
+    PROJECT_VER aus CMake überstimmen.
+    """
+    VERSION_FILE.write_text(new_ver + "\n", encoding="utf-8")
+    if SDKCONFIG.exists():
+        text = SDKCONFIG.read_text(encoding="utf-8")
+        cleaned = re.sub(
+            r'^(CONFIG_APP_PROJECT_VER_FROM_CONFIG=y|CONFIG_APP_PROJECT_VER_STR=.*'
+            r'|CONFIG_APP_PROJECT_VER=.*)\n?', '', text, flags=re.MULTILINE)
+        cleaned = cleaned.rstrip("\n") + "\n"
+        if cleaned != text:
+            SDKCONFIG.write_text(cleaned, encoding="utf-8")
 
 
 def run_cmd(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
@@ -253,7 +271,7 @@ def main() -> int:
     if current:
         print(f"Aktuelle Version: {version_str(current)}")
     else:
-        print("Keine Version in sdkconfig gefunden, starte bei 1.0.0")
+        print("Keine Version in version.txt gefunden, starte bei 1.0.0")
         current = (1, 0, 0)
 
     new_ver = bump_version(current, bump_mode)
@@ -261,12 +279,12 @@ def main() -> int:
     print(f"Neue Version: {new_str}")
 
     if dry_run:
-        set_version_in_sdkconfig(new_str)
+        set_version(new_str)
         print(f"[DRY RUN] Version auf {new_str} gesetzt (kein Build/Upload).")
         return 0
 
-    # Version in sdkconfig schreiben
-    set_version_in_sdkconfig(new_str)
+    # Version in version.txt schreiben
+    set_version(new_str)
 
     # Firmware bauen
     fw_path = build_firmware()
