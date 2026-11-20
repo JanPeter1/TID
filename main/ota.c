@@ -6,7 +6,6 @@
 #include "cJSON.h"
 #include "esp_app_format.h"
 #include "esp_check.h"
-#include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
@@ -14,10 +13,14 @@
 #include "esp_random.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "mbedtls/sha256.h"
+#include "psa/crypto.h"
 #include "memory.h"
 
+#include "familie_riegel_ca.h"
+
 static const char *TAG = "ota";
+
+#define OTA_MANIFEST_JSON_SIZE 2048
 
 static ota_status_t s_status = OTA_STATUS_IDLE;
 static ota_status_callback_t s_callback = NULL;
@@ -93,10 +96,10 @@ static bool http_get_json(const char *url, char *output, size_t output_size)
         .event_handler = json_event_handler,
         .user_data = &response,
         .timeout_ms = 20000,
-        .crt_bundle_attach = esp_crt_bundle_attach,
+        .cert_pem = FAMILIE_RIEGEL_CA_PEM,
         .keep_alive_enable = true,
-        .buffer_size = 2048,
-        .buffer_size_tx = 1024,
+        .buffer_size = 4096,
+        .buffer_size_tx = 2048,
     };
 
     esp_http_client_handle_t client = esp_http_client_init(&config);
@@ -165,9 +168,13 @@ static bool verify_sha256_partition(const esp_partition_t *partition,
                                     size_t firmware_size,
                                     const char *expected_hex)
 {
-    mbedtls_sha256_context ctx;
-    mbedtls_sha256_init(&ctx);
-    mbedtls_sha256_starts(&ctx, 0);
+    psa_hash_operation_t op = psa_hash_operation_init();
+    psa_status_t status = psa_hash_setup(&op, PSA_ALG_SHA_256);
+    if (status != PSA_SUCCESS)
+    {
+        ESP_LOGE(TAG, "psa_hash_setup failed: %d", status);
+        return false;
+    }
 
     uint8_t buffer[4096];
     size_t remaining = firmware_size;
@@ -181,17 +188,28 @@ static bool verify_sha256_partition(const esp_partition_t *partition,
         {
             ESP_LOGE(TAG, "Partition read failed at offset %u: %s",
                      (unsigned)offset, esp_err_to_name(err));
-            mbedtls_sha256_free(&ctx);
+            psa_hash_abort(&op);
             return false;
         }
-        mbedtls_sha256_update(&ctx, buffer, to_read);
+        status = psa_hash_update(&op, buffer, to_read);
+        if (status != PSA_SUCCESS)
+        {
+            ESP_LOGE(TAG, "psa_hash_update failed: %d", status);
+            psa_hash_abort(&op);
+            return false;
+        }
         offset += to_read;
         remaining -= to_read;
     }
 
     uint8_t hash[32];
-    mbedtls_sha256_finish(&ctx, hash);
-    mbedtls_sha256_free(&ctx);
+    size_t hash_len = 0;
+    status = psa_hash_finish(&op, hash, sizeof(hash), &hash_len);
+    if (status != PSA_SUCCESS || hash_len != 32)
+    {
+        ESP_LOGE(TAG, "psa_hash_finish failed: %d", status);
+        return false;
+    }
 
     char calc_hex[65] = {0};
     for (int i = 0; i < 32; i++)
@@ -273,10 +291,10 @@ static bool download_firmware(const ota_manifest_t *manifest, const esp_partitio
         .event_handler = download_event_handler,
         .user_data = &ctx,
         .timeout_ms = 60000,
-        .crt_bundle_attach = esp_crt_bundle_attach,
+        .cert_pem = FAMILIE_RIEGEL_CA_PEM,
         .keep_alive_enable = true,
-        .buffer_size = 8192,
-        .buffer_size_tx = 1024,
+        .buffer_size = 4096,
+        .buffer_size_tx = 512,
     };
 
     esp_http_client_handle_t client = esp_http_client_init(&config);
@@ -347,20 +365,22 @@ esp_err_t ota_init(void)
     return ESP_OK;
 }
 
+#define OTA_MANIFEST_JSON_SIZE 2048
+
 esp_err_t ota_check_update(ota_manifest_t *manifest)
 {
     ESP_LOGI(TAG, "Checking for firmware update at %s", OTA_MANIFEST_URL);
 
     set_status(OTA_STATUS_CHECKING, "Checking for updates...");
 
-    char *json = memory_alloc(8192, MEMORY_ALLOC_LARGE);
+    char *json = memory_alloc(OTA_MANIFEST_JSON_SIZE, MEMORY_ALLOC_LARGE);
     if (!json)
     {
         set_status(OTA_STATUS_FAILED, "Memory allocation failed");
         return ESP_ERR_NO_MEM;
     }
 
-    bool ok = http_get_json(OTA_MANIFEST_URL, json, 8192);
+    bool ok = http_get_json(OTA_MANIFEST_URL, json, OTA_MANIFEST_JSON_SIZE);
     if (!ok)
     {
         memory_free(json);

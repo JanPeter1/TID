@@ -18,6 +18,7 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
+#include "familie_riegel_ca.h"
 #include "freertos/event_groups.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -135,15 +136,17 @@ static bool http_get(const char *url, const char *username, const char *password
         .capacity = output_size,
     };
     output[0] = '\0';
+    bool use_custom_ca = strstr(url, "familie-riegel.de") != NULL;
     esp_http_client_config_t config = {
         .url = url,
         .event_handler = response_event,
         .user_data = &response,
         .timeout_ms = 15000,
-        .crt_bundle_attach = esp_crt_bundle_attach,
+        .crt_bundle_attach = use_custom_ca ? NULL : esp_crt_bundle_attach,
+        .cert_pem = use_custom_ca ? FAMILIE_RIEGEL_CA_PEM : NULL,
         .keep_alive_enable = true,
-        .buffer_size = 2048,
-        .buffer_size_tx = 1024,
+        .buffer_size = 4096,
+        .buffer_size_tx = 2048,
     };
     if (username && username[0])
     {
@@ -247,15 +250,16 @@ static bool http_get_photo_file(const char *url, uint32_t expected_size,
         .capacity = required_capacity,
     };
     (*jpeg_buffer)[0] = 0;
-    esp_http_client_config_t config = {
+esp_http_client_config_t config = {
         .url = url,
         .event_handler = response_event,
         .user_data = &response,
         .timeout_ms = 20000,
-        .crt_bundle_attach = esp_crt_bundle_attach,
+        .crt_bundle_attach = strstr(url, "familie-riegel.de") != NULL ? NULL : esp_crt_bundle_attach,
+        .cert_pem = strstr(url, "familie-riegel.de") != NULL ? FAMILIE_RIEGEL_CA_PEM : NULL,
         .keep_alive_enable = true,
-        .buffer_size = 2048,
-        .buffer_size_tx = 1024,
+        .buffer_size = 4096,
+        .buffer_size_tx = 2048,
     };
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (!client)
@@ -374,8 +378,8 @@ static bool http_get_event_image_file(const char *url, uint32_t request_serial,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .keep_alive_enable = true,
         .method = HTTP_METHOD_GET,
-        .buffer_size = 2048,
-        .buffer_size_tx = 1024,
+        .buffer_size = 4096,
+        .buffer_size_tx = 2048,
     };
 
     esp_err_t err = ESP_FAIL;
@@ -923,6 +927,8 @@ static bool parse_event_response(const char *json, const char *today, const char
         cJSON *timeslots = object_item(hit, "timeslots");
         if (!title || !slug || !cJSON_IsArray(timeslots))
             continue;
+
+        ESP_LOGD(TAG, "Parsing VVV event: %s (%s) at %s", title, slug, place);
 
         for (cJSON *slot = timeslots->child;
              slot && raw_event_count < raw_event_capacity; slot = slot->next)

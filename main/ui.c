@@ -57,6 +57,7 @@ static TickType_t setup_visible_until;
 static TickType_t touch_started_at;
 static int touch_start_x;
 static int touch_start_y;
+static TickType_t setup_touch_started_at;
 static app_data_t *snapshot;
 static app_data_t *previous;
 
@@ -259,12 +260,24 @@ static void draw_status(uint8_t timer_progress)
     uint16_t wifi_color = !config_wifi_connected() ? 0xF800
         : rssi >= -60 ? COLOR_GREEN : rssi >= -75 ? 0xFFE0 : 0xF800;
     draw_wifi_icon(186, 228, wifi_color, rssi);
-    draw_ota_status(210, 228);
     if (setup_credentials_visible && xTaskGetTickCount() < setup_visible_until) {
         display_fill_rect(0, 194, DISPLAY_WIDTH, 30, COLOR_ORANGE);
         display_text_bg(4, 194, config_ap_ssid(), COLOR_BACKGROUND, COLOR_ORANGE, 1);
         display_text_bg(4, 209, "HTTP://192.168.4.1 OHNE LOGIN",
                         COLOR_BACKGROUND, COLOR_ORANGE, 1);
+        ota_status_t status = ota_get_status();
+        if (status != OTA_STATUS_IDLE && status != OTA_STATUS_SUCCESS) {
+            const char *text = NULL;
+            switch (status) {
+                case OTA_STATUS_CHECKING: text = "OTA: PRUEFE"; break;
+                case OTA_STATUS_UPDATE_AVAILABLE: text = "OTA: UPDATE"; break;
+                case OTA_STATUS_DOWNLOADING: text = "OTA: DOWNLOAD"; break;
+                case OTA_STATUS_WRITING: text = "OTA: WRITE"; break;
+                case OTA_STATUS_FAILED: text = "OTA: FEHLER"; break;
+                default: text = "OTA"; break;
+            }
+            display_text_bg(210, 222, text, COLOR_BACKGROUND, COLOR_ORANGE, 1);
+        }
     } else {
         setup_credentials_visible = false;
     }
@@ -1006,6 +1019,12 @@ static bool draw_splash_screen(const app_data_t *data)
         display_fill_rect_opa(10, 178, 300, 52, 0x0000, 190);
         display_text_box(10, 189, 300, 42, welcome, COLOR_WHITE, 1);
     }
+
+    const char *version = ota_get_version();
+    char version_line[64];
+    snprintf(version_line, sizeof(version_line), "v%s", version);
+    display_text(10, 238, version_line, COLOR_MUTED, 1);
+
     return true;
 }
 
@@ -1314,13 +1333,33 @@ static void ui_task(void *unused)
                 ESP_LOGI("ui", "Entering deep sleep after touch release");
             }
             if (touched && !was_touched && y >= 228 && x >= 290) {
-                esp_err_t err = config_start_setup_ap();
-                if (err == ESP_OK) {
-                    setup_credentials_visible = true;
-                    setup_visible_until = now + pdMS_TO_TICKS(30000);
+                setup_touch_started_at = now;
+            }
+            if (!touched && was_touched && y >= 228 && x >= 290 &&
+                setup_touch_started_at != 0) {
+                TickType_t held = now - setup_touch_started_at;
+                setup_touch_started_at = 0;
+                if (held >= pdMS_TO_TICKS(2000)) {
+                    ota_manifest_t manifest = {0};
+                    esp_err_t err = ota_check_update(&manifest);
+                    if (err == ESP_OK && manifest.available) {
+                        ESP_LOGI("ui", "Manual OTA check: update available %s",
+                                 manifest.version);
+                    } else if (err == ESP_OK) {
+                        ESP_LOGI("ui", "Manual OTA check: no update");
+                    } else {
+                        ESP_LOGW("ui", "Manual OTA check failed: %s",
+                                 esp_err_to_name(err));
+                    }
                 } else {
-                    ESP_LOGE("ui", "Could not start setup AP: %s",
-                             esp_err_to_name(err));
+                    esp_err_t err = config_start_setup_ap();
+                    if (err == ESP_OK) {
+                        setup_credentials_visible = true;
+                        setup_visible_until = now + pdMS_TO_TICKS(30000);
+                    } else {
+                        ESP_LOGE("ui", "Could not start setup AP: %s",
+                                 esp_err_to_name(err));
+                    }
                 }
             }
         }
