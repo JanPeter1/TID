@@ -1,6 +1,6 @@
 # Willkommen
 @url https://familie-riegel.de/tx94/?Willkommen
-@image source/texelhaus.jpg
+@image texelhaus.jpg
 Das Texelhäuschen ist ein gemeinsames Feriendomizil. Bitte helft mit, es sauber und gut in Schuss zu halten.
 
 - Schäden oder Verbesserungen bitte den Gastgebern mitteilen.
@@ -9,7 +9,7 @@ Das Texelhäuschen ist ein gemeinsames Feriendomizil. Bitte helft mit, es sauber
 ---
 # Ankunft
 @url https://familie-riegel.de/tx94/?Ankunft
-@image source/map_detail.png contain
+@image map_detail.png contain
 Slufterweg 94
 Bungalowpark Slufterhoek
 1795 KR De Cocksdorp, Texel
@@ -26,7 +26,7 @@ Die Anzeige zeigt die aktuelle Temperatur.
 ---
 # Gasherd
 @url https://familie-riegel.de/tx94/?Ankunft
-@image source/gas.png
+@image gas.png
 Der Absperrhahn für den Herd ist im Schrank unter dem Herd.
 - Waagerecht in Richtung der Gasleitung: Gas ist geöffnet.
 - Quer zur Leitung: Gas ist geschlossen.
@@ -34,12 +34,19 @@ Der Absperrhahn für den Herd ist im Schrank unter dem Herd.
 ---
 # Internet
 @url https://familie-riegel.de/tx94/?Ankunft
-@image source/Steckdose_Internet.png
+@image Steckdose_Internet.png
 @qr WIFI:T:WPA;S:Tx94 Guest;P:1795KRDeCocksdorp;;
 Den Stecker für die Fritz!Box im Vorratsraum einstecken und die Steckdose einschalten.
 
 SSID: Tx94 Guest
 PW: 1795KRDeCocksdorp
+
+---
+# Gartenhaus
+@url https://familie-riegel.de/tx94/
+@image Gartenhaus.jpg
+Der Schlüssel für das Gartenhaus hängt in dem Zimmer mit der Treppe an der Wand.
+Im Gartenhaus befinden sich die Fahrräder, Gartenmöbel und Werkzeuge.
 
 ---
 # Einkaufen
@@ -67,6 +74,14 @@ PW: 1795KRDeCocksdorp
 - Catharinahoeve
 - 't Pakhuus
 - De Texelse Visspecialist
+
+---
+# TV Empfang
+@url https://familie-riegel.de/tx94/
+@image Sat.jpg
+Es kommt manchmal vor, dass sich die Satelitenschüssel verstellt. In dem Fall,
+vorsichtig draußen die Schüssel verdrehen, bis wieder Empfang da ist. Der Abstand
+zur Wand beträgt ca. 32 cm. (siehe Foto)
 
 ---
 # Vor der Abfahrt
@@ -98,12 +113,17 @@ Bitte prüfen und bei Bedarf auffüllen:
 - Eintrag im Gästebuch nicht vergessen.
 
 ---
-# Schlafsofa
-@url https://familie-riegel.de/tx94/?Anleitungen
-Die Anleitung für das Schlafsofa ist als PDF auf der Haus-Infoseite verfügbar.
+# Kostenbeteiligung
+@url https://www.familie-riegel.de/tx94/
+@qr BCD\n002\n1\nSCT\nGENODEF1S09\nKerstin Riegel\nDE41 2509 0500 0102 9851 52\n\n\n\nTexel xx.xx.20xx - xx.xx.20xx
+400-600 EUR/Woche (Hauptsaison), 200-300 EUR (übrige Zeit)
+Konto: Kerstin Riegel, SPARDA-Bank Hannover
+IBAN: DE41 2509 0500 0102 9851 52, BIC: GENODEF1S09
+Weniger als die Hälfte des üblichen Bungalow-Preises
+Können Sie nicht zahlen? Melden Sie sich.
 
 ---
-# Gartenhaus
-@url https://familie-riegel.de/tx94/
-Der Schlüssel für das Gartenhaus hängt in dem Zimmer mit der Treppe an der Wand.
-Im Gartenhaus befinden sich die Fahrräder, Gartenmöbel und Werkzeuge.
+# Schlafsofa
+@url https://familie-riegel.de/tx94/?Anleitungen
+@image Schlafsofa.jpg
+Die Anleitung für das Schlafsofa ist als PDF auf der Haus-Infoseite verfügbar.
