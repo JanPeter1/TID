@@ -260,6 +260,8 @@ static void draw_ota_progress(void)
 /* Redraw the full page with the current OTA snapshot. Called from ota.c
  * during an active download so the progress bar updates while esp_http_client
  * blocks the UI task. */
+static void draw_page(const app_data_t *data, uint8_t timer_progress,
+                      bool splash_visible);
 void ui_redraw(void)
 {
     if (s_ota_snapshot) {
