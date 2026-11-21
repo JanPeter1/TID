@@ -101,4 +101,5 @@ HTTPS data requests use the ESP-IDF certificate bundle. Do not commit Wi-Fi or c
 - `main/data.c` / `main/data.h`: remote requests, parsing, refresh task, and cache.
 - `assets/info/pages.txt` and `tools/generate_info_pages.py`: source format and build-time generator for the offline information pages and the 320 x 240 startup splash image. Supports `@url`, `@image`, and `@qr` directives.
 - `assets/photos/source/`, `tools/process_photos.py`, `tools/photo_profiles.json`, and `tools/requirements-photos.txt`: source images, per-board photo variants, processor configuration, and Python dependencies.
+- `docs/kurzanleitung.md`: two-page quick guide for users (German) with drawings in `docs/img/`; the images come from `tools/generate_quickstart_images.py`, PDF build instructions are at the top of the file.
 - `partitions.csv`: 4 MB flash layout with dual OTA application slots and a dedicated content-cache NVS partition. Flash the partition table along with the firmware after changing this layout.

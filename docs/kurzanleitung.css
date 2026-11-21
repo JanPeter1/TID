@@ -1,0 +1,49 @@
+/* Print layout for kurzanleitung.md (pandoc + wkhtmltopdf, A4, 2 pages). */
+body {
+  font-family: "DejaVu Sans", Arial, Helvetica, sans-serif;
+  font-size: 9pt;
+  line-height: 1.3;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  color: #1e1e1e;
+}
+h1 {
+  font-size: 17pt;
+  margin: 0 0 6px 0;
+  padding-bottom: 3px;
+  border-bottom: 2px solid #ffa500;
+}
+h2 {
+  font-size: 11pt;
+  margin: 7px 0 3px 0;
+  color: #b36b00;
+}
+p { margin: 4px 0; }
+ol, ul { margin: 3px 0; padding-left: 20px; }
+li { margin: 1px 0; }
+figure { margin: 4px 0; text-align: center; }
+figcaption { display: none; }
+img { display: block; margin: 4px auto; max-width: 100%; }
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 4px 0;
+  font-size: 8.5pt;
+}
+th, td {
+  border: 1px solid #c8c8c8;
+  padding: 2px 5px;
+  vertical-align: top;
+}
+th { background: #f3e6cf; }
+blockquote {
+  margin: 4px 0;
+  padding: 2px 8px;
+  border-left: 3px solid #d72d2d;
+  background: #fbeeee;
+}
+blockquote p { margin: 2px 0; }
+code { font-family: "DejaVu Sans Mono", monospace; font-size: 8.5pt; }
+
+@page { size: A4; margin: 12mm 14mm; }
