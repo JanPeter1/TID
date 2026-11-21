@@ -5,7 +5,7 @@
 
 #include "lvgl.h"
 
-#define INFO_PAGE_MAX_LINES 10
+#define INFO_PAGE_MAX_LINES 15
 
 typedef struct {
     const char *title;

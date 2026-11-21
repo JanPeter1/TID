@@ -11,7 +11,9 @@ from PIL import Image, ImageOps
 
 IMAGE_WIDTH = 108
 IMAGE_HEIGHT = 81
-MAX_LINES = 10
+MAX_LINES_WITH_IMAGE = 10
+MAX_LINES_WITHOUT_IMAGE = 15
+MAX_LINES = MAX_LINES_WITHOUT_IMAGE
 SPLASH_WIDTH = 320
 SPLASH_HEIGHT = 240
 
@@ -121,9 +123,10 @@ def wrap_page(page):
 
     while rows and rows[-1] == "":
         rows.pop()
-    if len(rows) > MAX_LINES:
+    max_lines = MAX_LINES_WITH_IMAGE if page["image"] else MAX_LINES_WITHOUT_IMAGE
+    if len(rows) > max_lines:
         raise InputError(
-            f"page {page['title']!r} needs {len(rows)} display lines; maximum is {MAX_LINES}"
+            f"page {page['title']!r} needs {len(rows)} display lines; maximum is {max_lines}"
         )
     return rows
 
