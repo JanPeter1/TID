@@ -143,12 +143,12 @@ def write_if_changed(path, contents):
 
 def scale_source_image(asset_root, image):
     relative_path = image["source"]
+    if not relative_path.startswith("source/") and not relative_path.startswith("source\\"):
+        relative_path = "source/" + relative_path
     source_dir = (asset_root / "source").resolve()
     source_path = (asset_root / relative_path).resolve()
     if not source_path.is_relative_to(source_dir) or source_path == source_dir:
         raise InputError(f"image path must point inside assets/info/source: {relative_path}")
-    if not relative_path.startswith("source/") and not relative_path.startswith("source\\"):
-        raise InputError(f"image path must start with source/: {relative_path}")
     output_path = asset_root / "images" / f"{source_path.stem}.rgb565"
     expected_size = IMAGE_WIDTH * IMAGE_HEIGHT * 2
     source_stat = source_path.stat()
@@ -238,6 +238,8 @@ def generate(pages, asset_root, splash_image_path, splash_width, splash_height):
             raise InputError(f"page {page['title']!r} @url must use HTTPS")
         if page["image"]:
             source_name = page["image"]["source"]
+            if not source_name.startswith("source/") and not source_name.startswith("source\\"):
+                source_name = "source/" + source_name
             output_name = Path(source_name).stem + ".rgb565"
             previous_source = image_sources.get(output_name)
             if previous_source and previous_source != source_name:
