@@ -47,6 +47,7 @@ typedef struct {
     size_t sha256_len;
     size_t sha256_capacity;
     uint32_t total_size;
+    uint8_t last_drawn_percent;
 } download_ctx_t;
 
 static void set_status(ota_status_t new_status, const char *msg)
@@ -206,7 +207,14 @@ static esp_err_t download_event_handler(esp_http_client_event_t *evt)
         ESP_LOGD(TAG, "Downloaded %u/%u bytes",
                  (unsigned)*ctx->bytes_written,
                  (unsigned)ctx->sha256_capacity);
-        ui_redraw();
+        /* A full redraw per HTTP chunk would slow the download; draw once per
+         * percent. */
+        uint8_t percent = (uint8_t)(s_download_progress / 10);
+        if (percent != ctx->last_drawn_percent)
+        {
+            ctx->last_drawn_percent = percent;
+            ui_redraw();
+        }
     }
     return ESP_OK;
 }
@@ -238,6 +246,7 @@ static bool download_firmware(const ota_manifest_t *manifest, const esp_partitio
         .sha256_len = 0,
         .sha256_capacity = sha256_capacity,
         .total_size = manifest->size,
+        .last_drawn_percent = UINT8_MAX,
     };
 
     esp_http_client_config_t config = {
@@ -416,6 +425,7 @@ esp_err_t ota_start_update(const ota_manifest_t *manifest)
         return ESP_ERR_NO_MEM;
     }
 
+    s_download_progress = 0;
     set_status(OTA_STATUS_DOWNLOADING, "Downloading firmware...");
 
     esp_err_t err = esp_partition_erase_range(next, 0, next->size);

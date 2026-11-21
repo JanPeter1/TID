@@ -61,7 +61,9 @@ static int touch_start_y;
 static TickType_t setup_touch_started_at;
 static app_data_t *snapshot;
 static app_data_t *previous;
+/* Non-NULL only while a manually started OTA update runs in the UI task. */
 static app_data_t *s_ota_snapshot;
+static TaskHandle_t s_ui_task;
 
 static void draw_icon(int index, int center_x, int center_y, uint16_t color)
 {
@@ -222,51 +224,75 @@ static const char *ota_status_text(void)
     }
 }
 
-/* Draw an OTA progress bar and status text while an update is in progress. */
+/*
+ * Draw the OTA status panel (status text, plus a progress bar while
+ * downloading) for a manually started update. It is drawn last by draw_page()
+ * because LVGL stacks objects in creation order and the page content would
+ * otherwise cover it.
+ */
 static void draw_ota_progress(void)
 {
-    ota_status_t status = ota_get_status();
-    if (status != OTA_STATUS_DOWNLOADING && status != OTA_STATUS_WRITING) {
+    if (!s_ota_snapshot) {
         return;
     }
     const char *status_text = ota_status_text();
-    uint8_t progress = ota_get_progress();
+    if (!status_text) {
+        return;
+    }
+    ota_status_t status = ota_get_status();
+    bool show_bar = status == OTA_STATUS_DOWNLOADING ||
+                    status == OTA_STATUS_WRITING;
 
     const int bx = 40;
     const int by = 138;
     const int bw = 240;
     const int bh = 12;
 
-    /* Frame */
-    display_fill_rect(bx - 2, by - 2, bw + 4, bh + 4, COLOR_ORANGE);
-    /* Background */
-    display_fill_rect(bx, by, bw, bh, COLOR_BACKGROUND);
-    /* Progress */
-    int fill_w = (int)((uint32_t)bw * progress) / 100;
-    if (fill_w > 0)
-    {
-        display_fill_rect(bx, by, fill_w, bh, COLOR_WHITE);
+    /* Backing panel so the panel stays readable over any page content. */
+    display_fill_rect(bx - 8, by - 20, bw + 16, 52, COLOR_BACKGROUND);
+    if (show_bar) {
+        uint8_t progress = ota_get_progress();
+        if (progress > 100) progress = 100;
+        /* Frame */
+        display_fill_rect(bx - 2, by - 2, bw + 4, bh + 4, COLOR_ORANGE);
+        /* Background */
+        display_fill_rect(bx, by, bw, bh, COLOR_BACKGROUND);
+        /* Progress */
+        int fill_w = (int)((uint32_t)bw * progress) / 100;
+        if (fill_w > 0)
+        {
+            display_fill_rect(bx, by, fill_w, bh, COLOR_WHITE);
+        }
+        /* Percent text */
+        char pct[8];
+        snprintf(pct, sizeof(pct), "%u%%", (unsigned)progress);
+        display_text(bx + bw / 2 - 12, by - 14, pct, COLOR_ORANGE, 1);
     }
-    /* Percent text */
-    char pct[8];
-    snprintf(pct, sizeof(pct), "%u%%", (unsigned)progress);
-    display_text(bx + bw / 2 - 12, by - 14, pct, COLOR_ORANGE, 1);
     /* Status text */
-    if (status_text) {
-        display_text(bx, by + bh + 4, status_text, COLOR_ORANGE, 1);
-    }
+    display_text(bx, by + bh + 4, status_text, COLOR_ORANGE, 1);
 }
 
-/* Redraw the full page with the current OTA snapshot. Called from ota.c
- * during an active download so the progress bar updates while esp_http_client
- * blocks the UI task. */
+/* Redraw the full page with the current OTA snapshot and render it right
+ * away. Called on OTA status changes and download progress while a manual
+ * update blocks the UI task (e.g. inside esp_http_client_perform), where the
+ * main loop cannot run display_process(). Only the UI task may touch LVGL, so
+ * calls from other tasks (e.g. the nightly check in ota_task) are ignored. */
 static void draw_page(const app_data_t *data, uint8_t timer_progress,
                       bool splash_visible);
 void ui_redraw(void)
 {
-    if (s_ota_snapshot) {
-        draw_page(s_ota_snapshot, 0, false);
+    if (!s_ota_snapshot || xTaskGetCurrentTaskHandle() != s_ui_task) {
+        return;
     }
+    draw_page(s_ota_snapshot, 0, false);
+    display_refresh_now();
+}
+
+static void ota_status_changed(ota_status_t status, const char *message)
+{
+    (void)status;
+    (void)message;
+    ui_redraw();
 }
 
 /*
@@ -1082,14 +1108,13 @@ static void draw_info_page(void)
     }
 }
 
-static void draw_page(const app_data_t *data, uint8_t timer_progress,
-                      bool splash_visible)
+static void draw_page_content(const app_data_t *data, uint8_t timer_progress,
+                              bool splash_visible)
 {
     if (splash_visible && draw_splash_screen(data)) return;
 
     display_draw_frame();
     draw_tabs();
-    draw_ota_progress();
     if (qr_visible) {
         static const char *page_names[PAGE_COUNT] = {
             "HEUTE", "KALENDER", "FOTOS", "WETTER", "INFO"
@@ -1284,9 +1309,17 @@ static void draw_page(const app_data_t *data, uint8_t timer_progress,
     draw_subpage_indicator(data);
 }
 
+static void draw_page(const app_data_t *data, uint8_t timer_progress,
+                      bool splash_visible)
+{
+    draw_page_content(data, timer_progress, splash_visible);
+    draw_ota_progress();
+}
+
 static void ui_task(void *unused)
 {
     (void)unused;
+    s_ui_task = xTaskGetCurrentTaskHandle();
     bool was_touched = false;
     bool refresh_sent = false;
     page_t previous_page = PAGE_COUNT;
@@ -1392,19 +1425,24 @@ static void ui_task(void *unused)
                 setup_touch_started_at = 0;
                 if (held >= pdMS_TO_TICKS(2000)) {
                     ota_manifest_t manifest = {0};
+                    /* Set before the check so every phase (check, erase,
+                     * download, verify) is drawn by ota_status_changed(). */
+                    s_ota_snapshot = snapshot;
                     esp_err_t err = ota_check_update(&manifest);
                     if (err == ESP_OK && manifest.available) {
                         ESP_LOGI("ui", "Manual OTA check: update available %s, starting update",
                                  manifest.version);
-                        s_ota_snapshot = snapshot;
                         ota_start_update(&manifest);
-                        s_ota_snapshot = NULL;
                     } else if (err == ESP_OK) {
                         ESP_LOGI("ui", "Manual OTA check: no update");
                     } else {
                         ESP_LOGW("ui", "Manual OTA check failed: %s",
                                  esp_err_to_name(err));
                     }
+                    /* Only reached without a reboot: keep the result
+                     * ("aktuell" / "Fehler") visible for a moment. */
+                    vTaskDelay(pdMS_TO_TICKS(3000));
+                    s_ota_snapshot = NULL;
                 } else if (config_setup_ap_active()) {
                     esp_err_t err = config_stop_setup_ap();
                     setup_credentials_visible = false;
@@ -1581,6 +1619,7 @@ esp_err_t ui_start(void)
         return ESP_ERR_NO_MEM;
     }
 
+    ota_set_status_callback(ota_status_changed);
     if (xTaskCreate(ui_task, "display", BOARD_UI_TASK_STACK_SIZE, NULL, 5, NULL) !=
         pdPASS) {
         memory_free(snapshot);
