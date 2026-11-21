@@ -221,6 +221,41 @@ static const char *ota_status_text(void)
     }
 }
 
+/* Draw an OTA progress bar and status text while an update is in progress. */
+static void draw_ota_progress(void)
+{
+    ota_status_t status = ota_get_status();
+    if (status != OTA_STATUS_DOWNLOADING && status != OTA_STATUS_WRITING) {
+        return;
+    }
+    const char *status_text = ota_status_text();
+    uint8_t progress = ota_get_progress();
+
+    const int bx = 40;
+    const int by = 138;
+    const int bw = 240;
+    const int bh = 12;
+
+    /* Frame */
+    display_fill_rect(bx - 2, by - 2, bw + 4, bh + 4, COLOR_ORANGE);
+    /* Background */
+    display_fill_rect(bx, by, bw, bh, COLOR_BACKGROUND);
+    /* Progress */
+    int fill_w = (int)((uint32_t)bw * progress) / 100;
+    if (fill_w > 0)
+    {
+        display_fill_rect(bx, by, fill_w, bh, COLOR_WHITE);
+    }
+    /* Percent text */
+    char pct[8];
+    snprintf(pct, sizeof(pct), "%u%%", (unsigned)progress);
+    display_text(bx + bw / 2 - 12, by - 14, pct, COLOR_ORANGE, 1);
+    /* Status text */
+    if (status_text) {
+        display_text(bx, by + bh + 4, status_text, COLOR_ORANGE, 1);
+    }
+}
+
 /*
  * Setup banner above the status bar: three lines (SSID, URL, firmware version
  * plus OTA status). It must end at y 224 so it never overlaps the footer.
@@ -1041,6 +1076,7 @@ static void draw_page(const app_data_t *data, uint8_t timer_progress,
 
     display_draw_frame();
     draw_tabs();
+    draw_ota_progress();
     if (qr_visible) {
         static const char *page_names[PAGE_COUNT] = {
             "HEUTE", "KALENDER", "FOTOS", "WETTER", "INFO"

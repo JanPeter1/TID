@@ -52,6 +52,9 @@ esp_err_t ota_start_update(const ota_manifest_t *manifest);
 /* Get the current OTA status. */
 ota_status_t ota_get_status(void);
 
+/* Get the current download progress (0-100 percent). */
+uint8_t ota_get_progress(void);
+
 /* Set a callback that is invoked when the OTA status changes. */
 void ota_set_status_callback(ota_status_callback_t callback);
 

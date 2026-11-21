@@ -28,6 +28,7 @@ static ota_status_t s_status = OTA_STATUS_IDLE;
 static ota_status_callback_t s_callback = NULL;
 static char s_error[256] = {0};
 static ota_manifest_t s_current_manifest = {0};
+static uint32_t s_download_progress = 0;
 
 typedef struct {
     char *data;
@@ -42,6 +43,7 @@ typedef struct {
     uint8_t *sha256_data;
     size_t sha256_len;
     size_t sha256_capacity;
+    uint32_t total_size;
 } download_ctx_t;
 
 static void set_status(ota_status_t new_status, const char *msg)
@@ -194,6 +196,10 @@ static esp_err_t download_event_handler(esp_http_client_event_t *evt)
         }
 
         *ctx->bytes_written = written + evt->data_len;
+        if (ctx->total_size > 0)
+        {
+            s_download_progress = (*ctx->bytes_written * 1000) / ctx->total_size;
+        }
         ESP_LOGD(TAG, "Downloaded %u/%u bytes",
                  (unsigned)*ctx->bytes_written,
                  (unsigned)ctx->sha256_capacity);
@@ -227,6 +233,7 @@ static bool download_firmware(const ota_manifest_t *manifest, const esp_partitio
         .sha256_data = sha256_data,
         .sha256_len = 0,
         .sha256_capacity = sha256_capacity,
+        .total_size = manifest->size,
     };
 
     esp_http_client_config_t config = {
@@ -503,6 +510,11 @@ esp_err_t ota_start_update(const ota_manifest_t *manifest)
 ota_status_t ota_get_status(void)
 {
     return s_status;
+}
+
+uint8_t ota_get_progress(void)
+{
+    return (uint8_t)(s_download_progress / 10);
 }
 
 void ota_set_status_callback(ota_status_callback_t callback)

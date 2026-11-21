@@ -33,7 +33,6 @@ Der Absperrhahn für den Herd ist im Schrank unter dem Herd.
 
 ---
 # Internet
-@url https://familie-riegel.de/tx94/?Ankunft
 @image Steckdose_Internet.png
 @qr WIFI:T:WPA;S:Tx94 Guest;P:1795KRDeCocksdorp;;
 Den Stecker für die Fritz!Box im Vorratsraum einstecken und die Steckdose einschalten.
@@ -114,7 +113,6 @@ Bitte prüfen und bei Bedarf auffüllen:
 
 ---
 # Kostenbeteiligung
-@url https://www.familie-riegel.de/tx94/
 @qr BCD\n002\n1\nSCT\nGENODEF1S09\nKerstin Riegel\nDE41 2509 0500 0102 9851 52\n\n\n\nTexel xx.xx.20xx - xx.xx.20xx
 400-600 EUR/Woche (Hauptsaison), 200-300 EUR (übrige Zeit)
 Konto: Kerstin Riegel, SPARDA-Bank Hannover
