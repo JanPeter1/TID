@@ -998,7 +998,7 @@ static void current_page_url(const app_data_t *data, char *url, size_t url_size)
         break;
     case PAGE_WEATHER:
         snprintf(url, url_size, "%s",
-                 "https://open-meteo.com/en/forecast?latitude=53.124279&longitude=4.812830");
+                 "https://open-meteo.com/de/forecast?latitude=53.124279&longitude=4.812830");
         break;
     case PAGE_INFO:
         snprintf(url, url_size, "%s",
