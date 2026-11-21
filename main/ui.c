@@ -1276,7 +1276,8 @@ static void ui_task(void *unused)
     int previous_timer_second = -1;
     int previous_clock_minute = -1;
     bool previous_clock_valid = false;
-    bool ntp_sync_logged = false;
+    ota_status_t previous_ota_status = OTA_STATUS_IDLE;
+    uint8_t previous_ota_progress = UINT8_MAX;
     int previous_calendar_month = calendar_month_offset;
     int previous_calendar_scroll = calendar_scroll_offset;
     TickType_t last_auto_advance = xTaskGetTickCount();
@@ -1473,10 +1474,14 @@ static void ui_task(void *unused)
                             qr_visible != previous_qr_visibility ||
                             show_setup != previous_setup_visibility ||
                             memcmp(snapshot, previous, sizeof(*snapshot)) != 0;
+        ota_status_t current_ota_status = ota_get_status();
+        uint8_t current_ota_progress = ota_get_progress();
+        bool ota_redraw = current_ota_status != previous_ota_status ||
+                          current_ota_progress != previous_ota_progress;
         bool event_image_page_active =
             !splash_visible && !qr_visible && active_page == PAGE_CURRENT &&
             snapshot->events_valid && active_subpage[PAGE_CURRENT] < snapshot->event_count;
-        if (page_changed) {
+        if (page_changed || ota_redraw) {
             bool photo_page_changed = active_page == PAGE_PHOTOS &&
                 (active_page != previous_page ||
                  active_subpage[PAGE_PHOTOS] != previous_subpage);
@@ -1516,6 +1521,8 @@ static void ui_task(void *unused)
             previous_qr_visibility = qr_visible;
             previous_setup_visibility = show_setup;
             previous_splash_visible = splash_visible;
+            previous_ota_status = current_ota_status;
+            previous_ota_progress = current_ota_progress;
         } else if (clock_changed) {
             draw_page(snapshot, timer_progress, splash_visible);
             if (snapshot->from_cache && !splash_visible) {
