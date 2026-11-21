@@ -26,7 +26,32 @@ VVV sightseeing recommendations are not implemented. The calendar still uses a m
 
 ## Editing house information
 
-Edit `assets/info/pages.txt`; each `#` heading starts a subpage. Add one `@url` source link, an optional `@image source/<datei>` (optional `fit` or `contain` mode), then plain paragraphs or `- ` list items. Separate pages with `---`. The build-time generator checks that each page fits the display, scales referenced files from `assets/info/source/` to fixed 80 x 60 RGB565 files under `assets/info/images/`, and embeds the result in firmware. It reuses scaled files unless the source is newer or the output is missing or invalid. Original downloads from `familie-riegel.de/tx94/userfiles/images/` are kept under `assets/info/source/`.
+Edit `assets/info/pages.txt`; each `#` heading starts a subpage. Add one `@url` source link, optional `@image <datei>` (optional `fit` or `contain` mode), optional `@qr <daten>` for a QR code, then plain paragraphs or `- ` list items. Separate pages with `---`.
+
+**Example:**
+
+```
+# Internet
+@url https://familie-riegel.de/tx94/?Ankunft
+@image Steckdose_Internet.png
+@qr WIFI:T:WPA;S:Tx94 Guest;P:1795KRDeCocksdorp;;
+Den Stecker für die Fritz!Box im Vorratsraum einstecken und die Steckdose einschalten.
+
+SSID: Tx94 Guest
+PW: 1795KRDeCocksdorp
+
+---
+```
+
+The `@image` path may include or omit the `source/` prefix — both `source/texelhaus.jpg` and `texelhaus.jpg` resolve to `assets/info/source/texelhaus.jpg`. The `@qr` directive adds a Wi-Fi or link QR code next to the image on the subpage. The build-time generator (`tools/generate_info_pages.py`) scales images to fixed 108 x 81 RGB565 thumbnails, wraps text to fit the 10-line limit, and embeds everything into `main/info_pages_generated.c`. Run it manually with:
+
+```
+py tools/generate_info_pages.py --input assets/info/pages.txt --assets assets/info \
+  --splash-image assets/photos/source/IMG_20261102_081843.jpg \
+  --splash-width 480 --splash-height 320 --output main/info_pages_generated.c
+```
+
+The build system runs it automatically during compilation when `pages.txt`, the generator, the splash image, or any source image changes.
 
 ## Prepare and deploy photos
 
@@ -74,6 +99,6 @@ HTTPS data requests use the ESP-IDF certificate bundle. Do not commit Wi-Fi or c
 - `main/config.c` / `main/config.h`: Wi-Fi, NVS settings, setup AP, and SNTP startup.
 - `main/web_config.c` / `main/web_config.h`: local setup portal.
 - `main/data.c` / `main/data.h`: remote requests, parsing, refresh task, and cache.
-- `assets/info/pages.txt` and `tools/generate_info_pages.py`: source format and build-time generator for the offline information pages and the 320 x 240 startup splash image.
+- `assets/info/pages.txt` and `tools/generate_info_pages.py`: source format and build-time generator for the offline information pages and the 320 x 240 startup splash image. Supports `@url`, `@image`, and `@qr` directives.
 - `assets/photos/source/`, `tools/process_photos.py`, `tools/photo_profiles.json`, and `tools/requirements-photos.txt`: source images, per-board photo variants, processor configuration, and Python dependencies.
 - `partitions.csv`: 4 MB flash layout with dual OTA application slots and a dedicated content-cache NVS partition. Flash the partition table along with the firmware after changing this layout.
