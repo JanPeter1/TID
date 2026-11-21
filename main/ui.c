@@ -1096,7 +1096,9 @@ static void draw_page(const app_data_t *data, uint8_t timer_progress,
         if (qr_target) {
             draw_qr_code(qr_target);
             if (url[0]) {
-                draw_wrapped_text(url, 34, 185, 2, COLOR_MUTED, 0);
+                draw_wrapped_text_width(url, 34, 185, 2,
+                                        DISPLAY_WIDTH - 34 - 28,
+                                        COLOR_MUTED, 0);
             }
         }
         draw_side_buttons();
