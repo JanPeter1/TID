@@ -141,6 +141,39 @@ def run_cmd(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
     return proc
 
 
+def generate_info_pages() -> None:
+    """Regeneriert die Info-Seiten C-Datei vor dem Build."""
+    print("Generiere Info-Seiten ...")
+
+    # Splash-Dimensionen anhand des Boards aus sdkconfig ableiten
+    splash_width = 320
+    splash_height = 240
+    board_text = ""
+    for cfg in (SDKCONFIG_DEFAULTS, PROJECT_DIR / "sdkconfig"):
+        if cfg.exists():
+            board_text += cfg.read_text(encoding="utf-8")
+    if "CONFIG_TID_BOARD_JC3248W535C=y" in board_text:
+        splash_width = 480
+        splash_height = 320
+
+    gen_script = PROJECT_DIR / "tools" / "generate_info_pages.py"
+    input_file = PROJECT_DIR / "assets" / "info" / "pages.txt"
+    assets_dir = PROJECT_DIR / "assets" / "info"
+    output_file = PROJECT_DIR / "main" / "info_pages_generated.c"
+    splash_image = PROJECT_DIR / "assets" / "photos" / "source" / "IMG_20261102_081843.jpg"
+
+    run_cmd([
+        "py", str(gen_script),
+        "--input", str(input_file),
+        "--assets", str(assets_dir),
+        "--output", str(output_file),
+        "--splash-image", str(splash_image),
+        "--splash-width", str(splash_width),
+        "--splash-height", str(splash_height),
+    ], check=True)
+    print(f"Info-Seiten generiert: {output_file}")
+
+
 def build_firmware() -> Path:
     """Baut das Projekt und gibt den Pfad zur firmware.bin zurück."""
     print("Baue Firmware ...")
@@ -313,8 +346,16 @@ def main() -> int:
     # Version in version.txt schreiben
     set_version(new_str)
 
+    # Info-Seiten neu generieren
+    generate_info_pages()
+
     # Firmware bauen
-    fw_path = build_firmware()
+    try:
+        fw_path = build_firmware()
+    except Exception:
+        # Build fehlgeschlagen: Version zurücksetzen
+        set_version(version_str(current))
+        raise
 
     # SHA-256 berechnen
     sha256_hex = compute_sha256(fw_path)
