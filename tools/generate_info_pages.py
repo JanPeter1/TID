@@ -14,6 +14,8 @@ IMAGE_HEIGHT = 81
 MAX_LINES_WITH_IMAGE = 10
 MAX_LINES_WITHOUT_IMAGE = 15
 MAX_LINES = MAX_LINES_WITHOUT_IMAGE
+MAX_CHARS_PER_LINE_WITH_IMAGE = 38
+MAX_CHARS_PER_LINE_WITHOUT_IMAGE = 50
 SPLASH_WIDTH = 320
 SPLASH_HEIGHT = 240
 
@@ -105,7 +107,10 @@ def wrap_page(page):
 
         while words:
             prefix = first_prefix
-            width = 24 if page["image"] and len(rows) < 6 else 38
+            if page["image"]:
+                width = 24 if len(rows) < 6 else MAX_CHARS_PER_LINE_WITH_IMAGE
+            else:
+                width = MAX_CHARS_PER_LINE_WITHOUT_IMAGE
             available = width - len(prefix)
             line_words = []
             used = 0
