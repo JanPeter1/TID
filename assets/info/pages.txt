@@ -35,10 +35,11 @@ Der Absperrhahn für den Herd ist im Schrank unter dem Herd.
 # Internet
 @url https://familie-riegel.de/tx94/?Ankunft
 @image source/Steckdose_Internet.png
-Den Stecker für die Fritz!Box im Vorratsraum einstecken.
+@qr WIFI:T:WPA;S:Tx94 Guest;P:1795KRDeCocksdorp;;
+Den Stecker für die Fritz!Box im Vorratsraum einstecken und die Steckdose einschalten.
 
 SSID: Tx94 Guest
-PW: 1795KRDeCocksdort
+PW: 1795KRDeCocksdorp
 
 ---
 # Einkaufen

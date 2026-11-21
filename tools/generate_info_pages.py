@@ -44,7 +44,7 @@ def parse_pages(path):
             title = line[2:].strip()
             if not title:
                 raise InputError(f"line {line_number}: empty page title")
-            current = {"title": title, "url": "", "image": "", "body": []}
+            current = {"title": title, "url": "", "image": "", "qr": "", "body": []}
         elif line.startswith("@url "):
             if current is None:
                 raise InputError(f"line {line_number}: @url must follow a page title")
@@ -65,6 +65,12 @@ def parse_pages(path):
             if mode not in ("fit", "contain"):
                 raise InputError(f"line {line_number}: @image mode must be fit or contain")
             current["image"] = {"source": image_parts[0], "mode": mode}
+        elif line.startswith("@qr "):
+            if current is None:
+                raise InputError(f"line {line_number}: @qr must follow a page title")
+            if current["qr"]:
+                raise InputError(f"line {line_number}: duplicate @qr")
+            current["qr"] = line[4:].strip()
         elif line.startswith("@"):
             raise InputError(f"line {line_number}: unknown directive")
         elif current is None:
@@ -298,6 +304,7 @@ def generate(pages, asset_root, splash_image_path, splash_width, splash_height):
             "    {",
             f"        .title = {c_string(page['title'])},",
             f"        .url = {c_string(page['url'])},",
+            f"        .qr_data = {c_string(page['qr']) if page['qr'] else 'NULL'},",
             f"        .image = {image},",
             "        .lines = {",
         ])

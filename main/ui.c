@@ -1029,6 +1029,10 @@ static void draw_info_page(void)
     for (size_t i = 0; i < INFO_PAGE_MAX_LINES && page->lines[i]; i++) {
         display_text(34, 61 + (int)i * 14, page->lines[i], COLOR_WHITE, 1);
     }
+    if (page->qr_data) {
+        display_draw_qr_code(IMAGE_SLOT_X + IMAGE_SLOT_TRAY_WIDTH + 10,
+                             IMAGE_SLOT_Y, 80, page->qr_data);
+    }
 }
 
 static void draw_page(const app_data_t *data, uint8_t timer_progress,
@@ -1129,6 +1133,10 @@ static void draw_page(const app_data_t *data, uint8_t timer_progress,
                 size_t image_size = 0;
                 const uint8_t *image = downloaded_event_image
                     ? data_event_image_jpeg(&image_size) : NULL;
+                ESP_LOGD("ui", "Drawing event image: url=%s image=%p size=%u downloaded=%d cached=%d",
+                         event->image_url, (const void *)image, image_size,
+                         downloaded_event_image ? 1 : 0,
+                         image ? 0 : 1);
                 esp_err_t err = display_draw_event_thumbnail(
                     IMAGE_SLOT_X, IMAGE_SLOT_Y, event->image_url, image,
                     image_size);

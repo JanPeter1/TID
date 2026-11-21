@@ -10,6 +10,7 @@
 typedef struct {
     const char *title;
     const char *url;
+    const char *qr_data;
     const lv_image_dsc_t *image;
     const char *lines[INFO_PAGE_MAX_LINES];
 } info_page_t;
