@@ -15,7 +15,7 @@ MAX_LINES_WITH_IMAGE = 10
 MAX_LINES_WITHOUT_IMAGE = 15
 MAX_LINES = MAX_LINES_WITHOUT_IMAGE
 MAX_CHARS_PER_LINE_WITH_IMAGE = 38
-MAX_CHARS_PER_LINE_WITHOUT_IMAGE = 50
+MAX_CHARS_PER_LINE_WITHOUT_IMAGE = 60
 SPLASH_WIDTH = 320
 SPLASH_HEIGHT = 240
 
@@ -32,8 +32,8 @@ def parse_pages(path):
         nonlocal current
         if current is None:
             return
-        if not current["url"]:
-            raise InputError(f"page {current['title']!r} has no @url")
+        if not current["url"] and not current["qr"]:
+            raise InputError(f"page {current['title']!r} has no @url or @qr")
         if not current["body"]:
             raise InputError(f"page {current['title']!r} has no text")
         pages.append(current)
@@ -242,7 +242,7 @@ def generate(pages, asset_root, splash_image_path, splash_width, splash_height):
     image_bytes = {}
     image_sources = {}
     for page in pages:
-        if not page["url"].startswith("https://"):
+        if page["url"] and not page["url"].startswith("https://"):
             raise InputError(f"page {page['title']!r} @url must use HTTPS")
         if page["image"]:
             source_name = page["image"]["source"]

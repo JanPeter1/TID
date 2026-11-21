@@ -1087,11 +1087,18 @@ static void draw_page(const app_data_t *data, uint8_t timer_progress,
             ? info_pages[active_subpage[PAGE_INFO]].title
             : page_names[active_page];
         current_page_url(data, url, sizeof(url));
+        const char *qr_target = url[0] ? url :
+            (active_page == PAGE_INFO && info_pages[active_subpage[PAGE_INFO]].qr_data
+                ? info_pages[active_subpage[PAGE_INFO]].qr_data : NULL);
         snprintf(title, sizeof(title), "QR-CODE: %s", page_name);
         display_fill_rect(28, 34, 266, 188, COLOR_BACKGROUND);
         display_text(34, 40, title, COLOR_ORANGE, 1);
-        draw_qr_code(url);
-        draw_wrapped_text(url, 34, 185, 2, COLOR_MUTED, 0);
+        if (qr_target) {
+            draw_qr_code(qr_target);
+            if (url[0]) {
+                draw_wrapped_text(url, 34, 185, 2, COLOR_MUTED, 0);
+            }
+        }
         draw_side_buttons();
         draw_status(timer_progress);
         draw_subpage_indicator(data);

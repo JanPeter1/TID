@@ -26,7 +26,7 @@ VVV sightseeing recommendations are not implemented. The calendar still uses a m
 
 ## Editing house information
 
-Edit `assets/info/pages.txt`; each `#` heading starts a subpage. Add one `@url` source link, optional `@image <datei>` (optional `fit` or `contain` mode), optional `@qr <daten>` for a QR code, then plain paragraphs or `- ` list items. Separate pages with `---`.
+Edit `assets/info/pages.txt`; each `#` heading starts a subpage. Add one `@url` source link or one `@qr <daten>` QR code payload (at least one of them required), optional `@image <datei>` (optional `fit` or `contain` mode), then plain paragraphs or `- ` list items. Separate pages with `---`.
 
 **Example:**
 
