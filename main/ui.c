@@ -962,9 +962,8 @@ static void current_page_url(const app_data_t *data, char *url, size_t url_size)
         snprintf(url, url_size, "%s", "https://familie-riegel.de/tx94/photos/320x200");
         break;
     case PAGE_WEATHER:
-        snprintf(url, url_size, "%s", active_subpage[active_page] == 2
-                 ? "https://open-meteo.com/en/docs/marine-weather-api"
-                 : "https://open-meteo.com/en/docs");
+        snprintf(url, url_size, "%s",
+                 "https://open-meteo.com/en/forecast?latitude=53.124279&longitude=4.812830");
         break;
     case PAGE_INFO:
         snprintf(url, url_size, "%s",
