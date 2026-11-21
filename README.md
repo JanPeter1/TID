@@ -43,7 +43,7 @@ PW: 1795KRDeCocksdorp
 ---
 ```
 
-The `@image` path may include or omit the `source/` prefix — both `source/texelhaus.jpg` and `texelhaus.jpg` resolve to `assets/info/source/texelhaus.jpg`. The `@qr` directive adds a Wi-Fi or link QR code next to the image on the subpage. The build-time generator (`tools/generate_info_pages.py`) scales images to fixed 108 x 81 RGB565 thumbnails, wraps text to fit the line and character limits (10 lines / 38 chars with image, 15 lines / 50 chars without), and embeds everything into `main/info_pages_generated.c`. Run it manually with:
+The `@image` path may include or omit the `source/` prefix — both `source/texelhaus.jpg` and `texelhaus.jpg` resolve to `assets/info/source/texelhaus.jpg`. The `@qr` directive adds a Wi-Fi or link QR code next to the image on the subpage. A literal `\n` in the `@qr` payload becomes a real newline in the QR code data (useful for multi-line payloads such as SEPA transfer data). The build-time generator (`tools/generate_info_pages.py`) scales images to fixed 108 x 81 RGB565 thumbnails, wraps text to fit the line and character limits (10 lines / 38 chars with image, 15 lines / 50 chars without), and embeds everything into `main/info_pages_generated.c`. Run it manually with:
 
 ```
 py tools/generate_info_pages.py --input assets/info/pages.txt --assets assets/info \

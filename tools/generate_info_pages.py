@@ -74,7 +74,7 @@ def parse_pages(path):
                 raise InputError(f"line {line_number}: @qr must follow a page title")
             if current["qr"]:
                 raise InputError(f"line {line_number}: duplicate @qr")
-            current["qr"] = line[4:].strip()
+            current["qr"] = line[4:].strip().replace("\\n", "\n")
         elif line.startswith("@"):
             raise InputError(f"line {line_number}: unknown directive")
         elif current is None:
