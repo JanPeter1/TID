@@ -264,6 +264,7 @@ static bool download_firmware(const ota_manifest_t *manifest, const esp_partitio
     if (!client)
     {
         set_status(OTA_STATUS_FAILED, "HTTP client init failed");
+        memory_free(buffer);
         return false;
     }
 
@@ -278,6 +279,7 @@ static bool download_firmware(const ota_manifest_t *manifest, const esp_partitio
     *sha256_len = ctx.sha256_len;
 
     esp_http_client_cleanup(client);
+    memory_free(buffer);
 
     if (err != ESP_OK || status < 200 || status >= 300)
     {
