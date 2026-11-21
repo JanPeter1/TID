@@ -16,6 +16,8 @@
 #include "psa/crypto.h"
 #include "memory.h"
 
+#include "image_cache.h"
+
 #include "esp_crt_bundle.h"
 
 static const char *TAG = "ota";
@@ -170,71 +172,6 @@ static bool parse_manifest(const char *json, ota_manifest_t *manifest)
     return ok;
 }
 
-static bool verify_sha256_partition(const esp_partition_t *partition,
-                                    size_t firmware_size,
-                                    const char *expected_hex)
-{
-    psa_hash_operation_t op = psa_hash_operation_init();
-    psa_status_t status = psa_hash_setup(&op, PSA_ALG_SHA_256);
-    if (status != PSA_SUCCESS)
-    {
-        ESP_LOGE(TAG, "psa_hash_setup failed: %d", status);
-        return false;
-    }
-
-    uint8_t buffer[4096];
-    size_t remaining = firmware_size;
-    size_t offset = 0;
-
-    while (remaining > 0)
-    {
-        size_t to_read = remaining > sizeof(buffer) ? sizeof(buffer) : remaining;
-        esp_err_t err = esp_partition_read(partition, offset, buffer, to_read);
-        if (err != ESP_OK)
-        {
-            ESP_LOGE(TAG, "Partition read failed at offset %u: %s",
-                     (unsigned)offset, esp_err_to_name(err));
-            psa_hash_abort(&op);
-            return false;
-        }
-        status = psa_hash_update(&op, buffer, to_read);
-        if (status != PSA_SUCCESS)
-        {
-            ESP_LOGE(TAG, "psa_hash_update failed: %d", status);
-            psa_hash_abort(&op);
-            return false;
-        }
-        offset += to_read;
-        remaining -= to_read;
-    }
-
-    uint8_t hash[32];
-    size_t hash_len = 0;
-    status = psa_hash_finish(&op, hash, sizeof(hash), &hash_len);
-    if (status != PSA_SUCCESS || hash_len != 32)
-    {
-        ESP_LOGE(TAG, "psa_hash_finish failed: %d", status);
-        return false;
-    }
-
-    char calc_hex[65] = {0};
-    for (int i = 0; i < 32; i++)
-    {
-        snprintf(calc_hex + i * 2, 3, "%02x", hash[i]);
-    }
-
-    bool ok = strcasecmp(calc_hex, expected_hex) == 0;
-    if (!ok)
-    {
-        ESP_LOGE(TAG, "SHA256 mismatch: expected %s, got %s", expected_hex, calc_hex);
-    }
-    else
-    {
-        ESP_LOGI(TAG, "SHA256 verified OK");
-    }
-    return ok;
-}
-
 static esp_err_t download_event_handler(esp_http_client_event_t *evt)
 {
     download_ctx_t *ctx = (download_ctx_t *)evt->user_data;
@@ -309,6 +246,8 @@ static bool download_firmware(const ota_manifest_t *manifest, const esp_partitio
         set_status(OTA_STATUS_FAILED, "HTTP client init failed");
         return false;
     }
+
+    esp_http_client_set_header(client, "Accept-Encoding", "identity");
 
     set_status(OTA_STATUS_DOWNLOADING, "Downloading firmware...");
     memory_tls_lock();
@@ -468,6 +407,15 @@ esp_err_t ota_start_update(const ota_manifest_t *manifest)
 
     set_status(OTA_STATUS_DOWNLOADING, "Downloading firmware...");
 
+    esp_err_t err = esp_partition_erase_range(next, 0, next->size);
+    if (err != ESP_OK)
+    {
+        snprintf(s_error, sizeof(s_error), "Partition erase failed: %s", esp_err_to_name(err));
+        set_status(OTA_STATUS_FAILED, s_error);
+        memory_free(sha256_buffer);
+        return err;
+    }
+
     uint32_t bytes_written = 0;
     size_t sha256_len = 0;
     bool ok = download_firmware(manifest, next, &bytes_written,
@@ -480,7 +428,49 @@ esp_err_t ota_start_update(const ota_manifest_t *manifest)
 
     set_status(OTA_STATUS_WRITING, "Verifying SHA256...");
 
-    bool verified = verify_sha256_partition(next, bytes_written, manifest->sha256);
+    psa_hash_operation_t op = psa_hash_operation_init();
+    psa_status_t status = psa_hash_setup(&op, PSA_ALG_SHA_256);
+    if (status != PSA_SUCCESS)
+    {
+        ESP_LOGE(TAG, "psa_hash_setup failed: %d", status);
+        memory_free(sha256_buffer);
+        set_status(OTA_STATUS_FAILED, "SHA256 setup failed");
+        return ESP_FAIL;
+    }
+    status = psa_hash_update(&op, sha256_buffer, bytes_written);
+    if (status != PSA_SUCCESS)
+    {
+        ESP_LOGE(TAG, "psa_hash_update failed: %d", status);
+        psa_hash_abort(&op);
+        memory_free(sha256_buffer);
+        set_status(OTA_STATUS_FAILED, "SHA256 update failed");
+        return ESP_FAIL;
+    }
+    uint8_t hash[32];
+    size_t hash_len = 0;
+    status = psa_hash_finish(&op, hash, sizeof(hash), &hash_len);
+    if (status != PSA_SUCCESS || hash_len != 32)
+    {
+        ESP_LOGE(TAG, "psa_hash_finish failed: %d", status);
+        psa_hash_abort(&op);
+        memory_free(sha256_buffer);
+        set_status(OTA_STATUS_FAILED, "SHA256 finish failed");
+        return ESP_FAIL;
+    }
+    char calc_hex[65] = {0};
+    for (int i = 0; i < 32; i++)
+    {
+        snprintf(calc_hex + i * 2, 3, "%02x", hash[i]);
+    }
+    bool verified = strcasecmp(calc_hex, manifest->sha256) == 0;
+    if (!verified)
+    {
+        ESP_LOGE(TAG, "SHA256 mismatch: expected %s, got %s", manifest->sha256, calc_hex);
+    }
+    else
+    {
+        ESP_LOGI(TAG, "SHA256 verified OK");
+    }
     memory_free(sha256_buffer);
 
     if (!verified)
@@ -491,7 +481,7 @@ esp_err_t ota_start_update(const ota_manifest_t *manifest)
 
     set_status(OTA_STATUS_WRITING, "Setting boot partition...");
 
-    esp_err_t err = esp_ota_set_boot_partition(next);
+    err = esp_ota_set_boot_partition(next);
     if (err != ESP_OK)
     {
         snprintf(s_error, sizeof(s_error), "Set boot partition failed: %s",
@@ -504,6 +494,7 @@ esp_err_t ota_start_update(const ota_manifest_t *manifest)
     set_status(OTA_STATUS_SUCCESS, "Update successful, rebooting...");
 
     vTaskDelay(pdMS_TO_TICKS(500));
+    image_cache_clear();
     esp_restart();
 
     return ESP_OK;

@@ -275,6 +275,11 @@ esp_http_client_config_t config = {
         finish_photo_buffer_use(prefetch);
         return false;
     }
+    esp_http_client_set_header(client, "Accept", "image/jpeg");
+    esp_http_client_set_header(client, "Accept-Encoding", "identity");
+    esp_http_client_set_header(
+        client, "Referer",
+        "https://www.texel.net/de/veranstaltungsuebersicht/");
     const uint32_t internal_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
     size_t internal_free_before = heap_caps_get_free_size(internal_caps);
     size_t internal_largest_before = heap_caps_get_largest_free_block(internal_caps);
@@ -404,6 +409,7 @@ static void prune_event_image_cache_locked(void)
  */
 static uint8_t *http_get_event_image(const char *url, size_t *written)
 {
+    void *result = NULL;
     if (!valid_event_image_url(url) || !written ||
         BOARD_EVENT_IMAGE_MAX_BYTES < 4U)
     {
@@ -448,6 +454,11 @@ static uint8_t *http_get_event_image(const char *url, size_t *written)
         if (err == ESP_OK)
         {
             err = esp_http_client_set_header(
+                client, "Accept-Encoding", "identity");
+        }
+        if (err == ESP_OK)
+        {
+            err = esp_http_client_set_header(
                 client, "Referer",
                 "https://www.texel.net/de/veranstaltungsuebersicht/");
         }
@@ -473,9 +484,9 @@ static uint8_t *http_get_event_image(const char *url, size_t *written)
                    scratch[0] == 0xFF && scratch[1] == 0xD8 &&
                    scratch[response.length - 2U] == 0xFF &&
                    scratch[response.length - 1U] == 0xD9;
-    uint8_t *result = NULL;
     if (success)
     {
+        ESP_LOGI(TAG, "Event image downloaded OK (%u bytes)", (unsigned)response.length);
         result = memory_alloc(response.length, MEMORY_ALLOC_LARGE);
         if (result)
         {
@@ -2087,7 +2098,16 @@ static void fetch_event_image(const char *url, uint32_t request_serial)
     xSemaphoreGive(data_lock);
     if (success && !cached)
     {
-        ESP_LOGI(TAG, "Loaded event image (%u bytes)", (unsigned)downloaded_size);
+        ESP_LOGI(TAG, "Event image downloaded (%u bytes, %s)", (unsigned)downloaded_size,
+                 success ? "OK" : "FAILED");
+    }
+    else if (cached)
+    {
+        ESP_LOGI(TAG, "Event image served from cache");
+    }
+    else
+    {
+        ESP_LOGW(TAG, "Event image download failed for %s", url);
     }
 }
 

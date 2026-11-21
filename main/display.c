@@ -33,6 +33,8 @@ static bool touch_pressed;
 static size_t line_count;
 static const uint8_t *photo_fs_data;
 static size_t photo_fs_size;
+static uint16_t *s_image_buffer = NULL;
+static lv_image_dsc_t s_image_dsc = {0};
 static size_t photo_fs_position;
 static lv_fs_drv_t photo_fs_driver;
 static lv_point_precise_t line_points[LVGL_LINE_CAPACITY][2];
@@ -292,6 +294,10 @@ void display_clear(uint16_t color)
 {
     if (!screen) return;
     lv_obj_clean(screen);
+    if (s_image_buffer) {
+        memory_free(s_image_buffer);
+        s_image_buffer = NULL;
+    }
     line_count = 0;
     page_timer_arc = NULL;
     lv_obj_set_style_bg_color(screen, color_from_rgb565(color), 0);
@@ -572,9 +578,13 @@ static esp_err_t decode_event_thumbnail(const uint8_t *data, size_t size,
 
     uint32_t source_width = decoder.header.w;
     uint32_t source_height = decoder.header.h;
+    ESP_LOGD(TAG, "JPEG decoded: %ux%u format=%d", source_width, source_height,
+             (int)decoder.header.cf);
     if (!source_width || !source_height ||
         decoder.header.cf != LV_COLOR_FORMAT_RGB888) {
         lv_image_decoder_close(&decoder);
+        ESP_LOGW(TAG, "JPEG format not supported: w=%u h=%u cf=%d",
+                 source_width, source_height, (int)decoder.header.cf);
         return ESP_ERR_INVALID_SIZE;
     }
 
@@ -659,7 +669,12 @@ static esp_err_t decode_event_thumbnail(const uint8_t *data, size_t size,
         }
     }
     lv_image_decoder_close(&decoder);
-    return complete ? err : ESP_FAIL;
+    if (complete) {
+        ESP_LOGD(TAG, "JPEG decode complete for thumbnail");
+        return ESP_OK;
+    }
+    ESP_LOGW(TAG, "JPEG decode incomplete (%u areas processed)", max_areas);
+    return ESP_FAIL;
 }
 
 esp_err_t display_draw_event_thumbnail(int x, int y, const char *url,
@@ -669,12 +684,24 @@ esp_err_t display_draw_event_thumbnail(int x, int y, const char *url,
     size_t url_length = strnlen(url, DATA_EVENT_IMAGE_URL_LENGTH);
     if (url_length >= DATA_EVENT_IMAGE_URL_LENGTH) return ESP_ERR_INVALID_SIZE;
 
+    if (s_image_buffer) {
+        memory_free(s_image_buffer);
+        s_image_buffer = NULL;
+    }
+
     if (image_cache_has(url)) {
+        ESP_LOGD(TAG, "Event image cache hit for %s", url);
         uint16_t *pixels = NULL;
         size_t size_read = 0;
         esp_err_t err = image_cache_read(url, &pixels, &size_read);
         if (err == ESP_OK && pixels && size_read == EVENT_THUMBNAIL_BYTES) {
-            lv_image_dsc_t image = {
+            uint32_t non_zero = 0;
+            for (size_t i = 0; i < EVENT_THUMBNAIL_WIDTH * EVENT_THUMBNAIL_HEIGHT; i++) {
+                if (pixels[i] != 0) non_zero++;
+            }
+            ESP_LOGI(TAG, "Rendering event image from cache (%u bytes, %u non-zero pixels)",
+                     (unsigned)size_read, non_zero);
+            s_image_dsc = (lv_image_dsc_t){
                 .header = {
                     .magic = LV_IMAGE_HEADER_MAGIC,
                     .cf = LV_COLOR_FORMAT_RGB565,
@@ -685,33 +712,54 @@ esp_err_t display_draw_event_thumbnail(int x, int y, const char *url,
                 .data_size = EVENT_THUMBNAIL_BYTES,
                 .data = (const uint8_t *)pixels,
             };
-            esp_err_t draw_err = display_draw_image(x, y, &image);
-            memory_free(pixels);
+            esp_err_t draw_err = display_draw_image(x, y, &s_image_dsc);
+            if (draw_err != ESP_OK) {
+                ESP_LOGE(TAG, "display_draw_image failed: %s", esp_err_to_name(draw_err));
+                memory_free(pixels);
+                return draw_err;
+            }
+            s_image_buffer = pixels;
             return draw_err;
         }
         if (pixels) memory_free(pixels);
+    } else {
+        ESP_LOGD(TAG, "Event image not in cache for %s", url);
     }
 
     if (!data || size < 4 || data[0] != 0xFF || data[1] != 0xD8) {
+        ESP_LOGW(TAG, "No valid JPEG data for %s (data=%p size=%u)", url, (const void *)data,
+                 data ? (unsigned)size : 0u);
         return ESP_ERR_NOT_FOUND;
     }
 
+    ESP_LOGI(TAG, "Decoding JPEG for %s (%u bytes)", url, (unsigned)size);
     uint16_t *pixels = memory_alloc(EVENT_THUMBNAIL_BYTES, MEMORY_ALLOC_LARGE);
-    if (!pixels) return ESP_ERR_NO_MEM;
+    if (!pixels) {
+        ESP_LOGE(TAG, "Failed to allocate %u bytes for thumbnail pixels",
+                 (unsigned)EVENT_THUMBNAIL_BYTES);
+        return ESP_ERR_NO_MEM;
+    }
     esp_err_t err = decode_event_thumbnail(data, size, pixels);
     if (err != ESP_OK) {
         memory_free(pixels);
-        ESP_LOGW(TAG, "Could not create event thumbnail: %s",
-                 esp_err_to_name(err));
+        ESP_LOGW(TAG, "Could not create event thumbnail for %s: %s",
+                 url, esp_err_to_name(err));
         return err;
     }
+    uint32_t non_zero = 0;
+    for (size_t i = 0; i < EVENT_THUMBNAIL_WIDTH * EVENT_THUMBNAIL_HEIGHT; i++) {
+        if (pixels[i] != 0) non_zero++;
+    }
+    ESP_LOGI(TAG, "Decoded JPEG for %s (%u bytes, %u non-zero pixels)",
+             url, (unsigned)size, non_zero);
 
     err = image_cache_write(url, pixels, EVENT_THUMBNAIL_BYTES);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to write thumbnail to cache: %s", esp_err_to_name(err));
+        ESP_LOGW(TAG, "Failed to write thumbnail to cache for %s: %s",
+                 url, esp_err_to_name(err));
     }
 
-    lv_image_dsc_t image = {
+    s_image_dsc = (lv_image_dsc_t){
         .header = {
             .magic = LV_IMAGE_HEADER_MAGIC,
             .cf = LV_COLOR_FORMAT_RGB565,
@@ -722,8 +770,13 @@ esp_err_t display_draw_event_thumbnail(int x, int y, const char *url,
         .data_size = EVENT_THUMBNAIL_BYTES,
         .data = (const uint8_t *)pixels,
     };
-    esp_err_t draw_err = display_draw_image(x, y, &image);
-    memory_free(pixels);
+    esp_err_t draw_err = display_draw_image(x, y, &s_image_dsc);
+    if (draw_err != ESP_OK) {
+        ESP_LOGE(TAG, "display_draw_image failed for %s: %s", url, esp_err_to_name(draw_err));
+        memory_free(pixels);
+        return draw_err;
+    }
+    s_image_buffer = pixels;
     return draw_err;
 }
 
