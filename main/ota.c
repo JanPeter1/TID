@@ -18,6 +18,8 @@
 
 #include "image_cache.h"
 
+#include "display.h"
+
 #include "esp_crt_bundle.h"
 
 static const char *TAG = "ota";
@@ -203,6 +205,7 @@ static esp_err_t download_event_handler(esp_http_client_event_t *evt)
         ESP_LOGD(TAG, "Downloaded %u/%u bytes",
                  (unsigned)*ctx->bytes_written,
                  (unsigned)ctx->sha256_capacity);
+        display_refresh_now();
     }
     return ESP_OK;
 }

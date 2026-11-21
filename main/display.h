@@ -41,3 +41,4 @@ void display_text_bg(int x, int y, const char *text, uint16_t foreground,
                      uint16_t background, uint8_t scale);
 void display_draw_frame(void);
 void display_draw_message(const char *title, const char *body);
+void display_refresh_now(void);

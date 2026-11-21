@@ -870,3 +870,12 @@ void display_draw_message(const char *title, const char *body)
     display_text_bg(12, 6, title, 0xFFFF, 0x10A3, 2);
     display_text(12, 52, body, 0xFD20, 1);
 }
+
+void display_refresh_now(void)
+{
+    if (lv_display)
+    {
+        lv_timer_handler();
+        lv_refr_now(lv_display);
+    }
+}
