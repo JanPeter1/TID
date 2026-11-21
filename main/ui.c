@@ -61,6 +61,7 @@ static int touch_start_y;
 static TickType_t setup_touch_started_at;
 static app_data_t *snapshot;
 static app_data_t *previous;
+static app_data_t *s_ota_snapshot;
 
 static void draw_icon(int index, int center_x, int center_y, uint16_t color)
 {
@@ -253,6 +254,16 @@ static void draw_ota_progress(void)
     /* Status text */
     if (status_text) {
         display_text(bx, by + bh + 4, status_text, COLOR_ORANGE, 1);
+    }
+}
+
+/* Redraw the full page with the current OTA snapshot. Called from ota.c
+ * during an active download so the progress bar updates while esp_http_client
+ * blocks the UI task. */
+void ui_redraw(void)
+{
+    if (s_ota_snapshot) {
+        draw_page(s_ota_snapshot, 0, false);
     }
 }
 
@@ -1383,7 +1394,9 @@ static void ui_task(void *unused)
                     if (err == ESP_OK && manifest.available) {
                         ESP_LOGI("ui", "Manual OTA check: update available %s, starting update",
                                  manifest.version);
+                        s_ota_snapshot = snapshot;
                         ota_start_update(&manifest);
+                        s_ota_snapshot = NULL;
                     } else if (err == ESP_OK) {
                         ESP_LOGI("ui", "Manual OTA check: no update");
                     } else {

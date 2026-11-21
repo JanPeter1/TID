@@ -19,6 +19,7 @@
 #include "image_cache.h"
 
 #include "display.h"
+#include "ui.h"
 
 #include "esp_crt_bundle.h"
 
@@ -205,7 +206,7 @@ static esp_err_t download_event_handler(esp_http_client_event_t *evt)
         ESP_LOGD(TAG, "Downloaded %u/%u bytes",
                  (unsigned)*ctx->bytes_written,
                  (unsigned)ctx->sha256_capacity);
-        display_refresh_now();
+        ui_redraw();
     }
     return ESP_OK;
 }
