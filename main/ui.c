@@ -1287,6 +1287,7 @@ static void ui_task(void *unused)
     uint8_t previous_ota_progress = UINT8_MAX;
     int previous_calendar_month = calendar_month_offset;
     int previous_calendar_scroll = calendar_scroll_offset;
+    bool ntp_sync_logged = false;
     TickType_t last_auto_advance = xTaskGetTickCount();
     TickType_t splash_started = last_auto_advance;
     TickType_t last_stack_report = xTaskGetTickCount();
